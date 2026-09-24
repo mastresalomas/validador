@@ -872,7 +872,7 @@ function resumirNegociacao(ids, linhas, cols) {
   };
 }
 
-function analisarPedido(id, linhas, cols, titulos, neg) {
+function analisarPedido(id, linhas, cols, titulos, neg, historico) {
   const cab = linhas[0];
   const valores = (col) => linhas.map((l) => String(l[col] ?? "").trim());
   const libComl = valores(cols.libComl);
@@ -901,6 +901,12 @@ function analisarPedido(id, linhas, cols, titulos, neg) {
   // usado só para manter os pedidos do mesmo cliente juntos na listagem —
   // a bonificação entra aqui mesmo ficando fora da soma da negociação
   base.grupo = `${base.cnpj || base.cliente}|${mesDe(base.data)}`;
+
+  // histórico do cliente pela quantidade de notas fiscais distintas no arquivo.
+  // Agrupado por raiz de CNPJ (filiais somam). Cada NF = um pedido faturado.
+  const chaveHist =
+    base.cnpj && !/^0+$/.test(base.cnpj) ? base.cnpj.slice(0, 8) : normalizar(base.cliente);
+  base.nfsCliente = historico && chaveHist ? historico.get(chaveHist) ?? 0 : null;
 
   // inadimplência reprova na entrada, antes de qualquer análise comercial.
   // procura primeiro o CNPJ exato; não achando, olha a raiz (grupo econômico)
@@ -1302,6 +1308,8 @@ background:var(--papel);color:var(--tinta);font-family:var(--sans);font-size:14p
 .vp-selo.erro{color:var(--bloq);border-color:var(--bloq);background:var(--bloqf)}
 .vp-selo.inadimplente{color:#FFF;border-color:#6B0F0A;background:#6B0F0A}
 .vp-selo.aberto{color:var(--aten);border-color:var(--aten);background:var(--atenf)}
+.vp-selo.novo{color:#0B5D6E;border-color:#0B5D6E;background:#E4F2F5;font-weight:600}
+.vp-selo.pedidos{color:var(--fraca);border-color:var(--linha);background:#fff}
 .vp-selo.alerta{color:var(--aten);border-color:var(--aten);background:var(--atenf)}
 .vp-selo.carta{color:var(--azul);border-color:var(--azul);background:#EDF3F9}
 .vp-selo.kit{color:#FFF;border-color:#5B3C88;background:#5B3C88}
@@ -1367,6 +1375,7 @@ const OPCIONAIS = {
   observacoes: ["OBSERVACAO", "OBSERVACOES", "OBSERVACAOPEDIDO", "OBSERVACOESPEDIDO", "OBS"],
   uf: ["UF", "ESTADO", "UFCLIENTE"],
   mercos: ["PEDIDOMERCOS", "MERCOS"],
+  notaFiscal: ["NOTAFISCAL", "NF", "NUMERONF", "NOTA"],
 };
 
 function detectarColunas(colunas) {
@@ -1601,6 +1610,26 @@ function ValidadorPedidos() {
         if (!porPedido.has(id)) { porPedido.set(id, []); ordem.push(id); }
         porPedido.get(id).push(l);
       }
+
+      // histórico do cliente: NFs distintas por CNPJ em toda a base.
+      // Vale como total de pedidos faturados só se o arquivo trouxer o histórico
+      // completo; num recorte mensal, conta apenas as NFs do período.
+      const historico = new Map();
+      if (mapa.notaFiscal) {
+        const porCliente = new Map();
+        for (const l of linhas) {
+          const nf = String(l[mapa.notaFiscal] ?? "").trim();
+          if (!nf || nf === "0") continue;
+          // agrupa pela raiz do CNPJ (8 primeiros dígitos) para somar as
+          // filiais de um mesmo cliente; sem CNPJ, cai no nome
+          const cnpj = mapa.cnpj ? normCnpj(l[mapa.cnpj]) : "";
+          const cli = cnpj && !/^0+$/.test(cnpj) ? cnpj.slice(0, 8) : normalizar(l[mapa.cliente]);
+          if (!cli) continue;
+          if (!porCliente.has(cli)) porCliente.set(cli, new Set());
+          porCliente.get(cli).add(nf);
+        }
+        for (const [cli, nfs] of porCliente) historico.set(cli, nfs.size);
+      }
       // mesmo cliente + mesma data = uma negociação; bonificação fica sempre à parte
       const porNegociacao = new Map();
       for (const id of ordem) {
@@ -1624,7 +1653,7 @@ function ValidadorPedidos() {
         n.porPedido.set(id, ls);
       }
       setArquivo(f);
-      setBruto({ porNegociacao, mapa, totalLinhas: linhas.length, temCnpj: !!mapa.cnpj });
+      setBruto({ porNegociacao, mapa, historico, totalLinhas: linhas.length, temCnpj: !!mapa.cnpj });
     } catch (e) {
       setFalha(e.message || "Não deu para ler esse arquivo.");
       setArquivo(null);
@@ -1655,7 +1684,7 @@ function ValidadorPedidos() {
     for (const n of bruto.porNegociacao.values()) {
       const resumo = resumirNegociacao(n.ids, n.linhas, bruto.mapa);
       for (const id of n.ids) {
-        pedidos.push(analisarPedido(id, n.porPedido.get(id), bruto.mapa, mapaTit, resumo));
+        pedidos.push(analisarPedido(id, n.porPedido.get(id), bruto.mapa, mapaTit, resumo, bruto.historico));
       }
     }
     return { pedidos, totalLinhas: bruto.totalLinhas };
@@ -1738,7 +1767,7 @@ function ValidadorPedidos() {
     for (const p of visiveis) {
       if (p.veredito === "liberado") continue;
       const cab = {
-        Pedido: p.id, Mercos: p.mercos || "", Pedidos: (p.pedidos || []).length, Cliente: p.cliente, Documento: p.doc || "", ValoresEmAberto: p.passivo ? p.passivo.valor.toFixed(2).replace(".", ",") : "", Representante: p.representante || "", Observacoes: p.observacoes || "", UF: p.uf || "", MC: p.margem ? (p.margem.pct*100).toFixed(1).replace(".",",")+"%" : "", Data: p.data, CondPgto: p.condPgto,
+        Pedido: p.id, Mercos: p.mercos || "", Pedidos: (p.pedidos || []).length, Cliente: p.cliente, Documento: p.doc || "", ValoresEmAberto: p.passivo ? p.passivo.valor.toFixed(2).replace(".", ",") : "", NFsCliente: p.nfsCliente != null ? p.nfsCliente : "", ClienteNovo: p.nfsCliente != null && p.nfsCliente <= 1 ? "sim" : "", Representante: p.representante || "", Observacoes: p.observacoes || "", UF: p.uf || "", MC: p.margem ? (p.margem.pct*100).toFixed(1).replace(".",",")+"%" : "", Data: p.data, CondPgto: p.condPgto,
         TotalPA: (p.totalBruto ?? 0).toFixed(2).replace(".", ","),
         Pagamento: p.pagto ? p.pagto.nome : "",
         Proteina: p.fatia != null ? (p.fatia * 100).toFixed(1) + "%" : "",
@@ -1889,6 +1918,19 @@ function ValidadorPedidos() {
                       <span className="vp-ped-data">{p.data || "sem data"}</span>
                       <span className="vp-ped-cli">{p.cliente}</span>
                       {p.doc ? <span className="vp-ped-doc">{p.doc}</span> : null}
+                      {p.nfsCliente === 1 ? (
+                        <span className="vp-selo novo" title="uma nota fiscal emitida na base">
+                          cliente novo
+                        </span>
+                      ) : p.nfsCliente != null && p.nfsCliente > 1 ? (
+                        <span className="vp-selo pedidos" title="notas fiscais emitidas na base">
+                          {p.nfsCliente} pedidos
+                        </span>
+                      ) : p.nfsCliente === 0 ? (
+                        <span className="vp-selo novo" title="nenhuma nota fiscal na base">
+                          primeira compra
+                        </span>
+                      ) : null}
                       {p.passivo && p.passivo.valor > 0 ? (
                         <span
                           className="vp-selo aberto"
