@@ -1,0 +1,2167 @@
+<!DOCTYPE html>
+<html lang="pt-BR"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>Validador de pedidos — Under Labz</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#129521;</text></svg>"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html,body{margin:0;height:100%;background:#E9EDF1}#raiz{min-height:100%}
+.vp-carregando{font-family:ui-monospace,monospace;color:#63707D;padding:40px;text-align:center}</style>
+</head><body>
+<div id="raiz"><div class="vp-carregando">Carregando o validador…</div></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+
+/* ============================================================
+   TABELA UNDER'S BROTHERS — AGOSTO
+   precos = [5.000, 10.000, 20.000, 30.000, 50.000, 100.000, 200.000]
+   ============================================================ */
+/* O número da coluna é o TETO da faixa, não o piso.
+   Passou R$ 1,00 do teto, o pedido já usa a coluna seguinte:
+   R$ 20.001 é pedido da faixa R$ 30.000. */
+const FAIXAS = [
+  { teto: 5000, rotulo: "R$ 5.000", curto: "5K" },
+  { teto: 10000, rotulo: "R$ 10.000", curto: "10K" },
+  { teto: 20000, rotulo: "R$ 20.000", curto: "20K" },
+  { teto: 30000, rotulo: "R$ 30.000", curto: "30K" },
+  { teto: 50000, rotulo: "R$ 50.000", curto: "50K" },
+  { teto: 100000, rotulo: "R$ 100.000", curto: "100K" },
+  { teto: 200000, rotulo: "R$ 200.000", curto: "200K" },
+];
+
+const TOLERANCIA = 0.02; // 2% para baixo no piso da faixa
+const TOLERANCIA_PROTEINA = 0.03; // 3 pontos percentuais sobre o limite vigente
+
+/* Limite de proteína por período, lido pela DATA DO PEDIDO.
+   Assim um pedido de agosto continua sendo julgado pela regra de agosto
+   mesmo que a conferência aconteça em setembro.
+   Para encerrar ou prorrogar a campanha, mexa só aqui. */
+const LIMITE_PADRAO = 0.5;
+const VIGENCIAS = [
+  { de: "2026-08-01", ate: "2026-09-30", limite: 0.7, nome: "exceção de agosto e setembro" },
+];
+
+function paraData(txt) {
+  const m = String(txt ?? "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (!m) return null;
+  return Number(m[3] + m[2] + m[1]);
+}
+const chaveData = (iso) => Number(iso.replace(/-/g, ""));
+
+/* a condição comercial vale para o mês inteiro do cliente */
+const mesDe = (txt) => {
+  const m = String(txt ?? "").trim().match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  return m ? `${m[2]}/${m[3]}` : "sem data";
+};
+
+function regimeProteina(dataPedido) {
+  const d = paraData(dataPedido);
+  const v = d && VIGENCIAS.find((x) => d >= chaveData(x.de) && d <= chaveData(x.ate));
+  const limite = v ? v.limite : LIMITE_PADRAO;
+  return {
+    limite,
+    teto: limite + TOLERANCIA_PROTEINA,
+    nome: v ? v.nome : "regra padrão",
+    excecao: !!v,
+    semData: !d,
+  };
+}
+
+const TABELA = [
+  ["100% WHEY CRUSH", 284.9, [115.9, 114.9, 113.9, 112.9, 111.9, 110.9, 109.9]],
+  ["ISO HYDRO CRUSH", 729.9, [277.98, 275.98, 273.98, 271.98, 269.98, 264.59, 259.3]],
+  ["ISO HYDRO CLINICAL 450G", 499.9, [192.91, 190.91, 188.91, 186.91, 184.91, 181.21, 177.59]],
+  ["PROTEIN CRUSH 450G", 159.9, [61.75, 60.76, 59.75, 58.76, 57.76, 56.76, 55.76]],
+  ["PROTEIN CRUSH 900G", 299.9, [105.89, 104.91, 103.89, 102.98, 101.91, 100.89, 99.9]],
+  ["BEEF PROTEIN CRUSH", 294.0, [105.46, 104.46, 103.46, 102.46, 101.46, 100.46, 99.46]],
+  ["CLEMBUTER UNDER", 199.9, [77.68, 76.42, 73.65, 71.2, 69.34, 65.87, 62.58]],
+  ["DIMETHYLEX", 167.9, [58.23, 56.45, 54.67, 53.56, 51.98, 50.23, 47.94]],
+  ["DIMETHYLEX STIM FREE", 139.9, [48.52, 47.04, 45.55, 44.63, 43.31, 41.85, 39.95]],
+  ["DIMETHYLEX TIME RELEASE", 214.9, [74.99, 72.2, 70.02, 68.1, 66.16, 62.86, 59.71]],
+  ["X-CARNITINE", 159.9, [62.1, 60.03, 58.23, 57.4, 55.47, 52.7, 50.07]],
+  ["RAMPAGE 300G", 209.9, [79.12, 77.89, 76.67, 75.44, 72.8, 69.16, 65.36]],
+  ["FCKNG BOOSTER 300G", 179.0, [68.03, 68.8, 65.57, 64.35, 62.1, 58.99, 55.74]],
+  ["FCKNG BOOSTER 600G", 269.0, [100.37, 99.14, 97.91, 96.68, 93.31, 88.64, 83.77]],
+  ["DISPLAY FCKNG BOOSTER", 229.9, [86.31, 85.08, 83.86, 82.63, 79.74, 75.76, 71.59]],
+  ["WARZONE NIGHT BATTLE", 219.9, [82.72, 81.49, 80.27, 79.04, 76.27, 72.46, 68.47]],
+  ["WARZONE ROCKET ENERGY", 269.0, [100.37, 99.14, 97.91, 96.68, 93.31, 88.64, 83.77]],
+  ["BETA ALANINE 300G", 129.9, [50.21, 49.01, 47.12, 46.7, 45.07, 42.82, 40.46]],
+  ["CREATINE 150G", 89.9, [24.12, 23.12, 22.85, 21.87, 21.83, 20.74, 19.6]],
+  ["CREATINE 300G", 145.9, [39.42, 38.23, 37.09, 36.65, 35.43, 33.66, 31.81]],
+  ["CREATINE SABOR 300G", 165.0, [45.77, 43.56, 42.01, 41.02, 40.07, 38.07, 35.98]],
+  ["CREATINE 500G", 219.9, [60.57, 58.42, 56.34, 54.2, 53.39, 50.72, 47.93]],
+  ["GLUTAMINA 300G", 124.9, [48.96, 47.21, 46.52, 43.89, 43.32, 41.15, 38.89]],
+  ["COQ-10 60 CAPS", 140.0, [54.01, 52.78, 51.56, 50.33, 48.57, 46.15, 43.61]],
+  ["OMEGA ULTRA 60 CAPS", 134.9, [52.23, 51.54, 49.23, 48.49, 47.27, 45.67, 43.1]],
+  ["OMEGA ULTRA 120 CAPS", 249.9, [96.76, 95.48, 91.2, 89.83, 87.57, 84.6, 79.84]],
+  ["CAFEINA 60 CAPS", 69.9, [28.8, 27.57, 26.35, 25.12, 24.24, 23.03, 21.76]],
+  ["OSTEO REPAIR 60 CAPS", 147.0, [57.8, 55.74, 53.75, 51.83, 50.98, 48.43, 45.77]],
+  ["MULTIVITAMINICO 90 CAPS", 105.0, [41.42, 40.19, 39.97, 37.74, 36.42, 34.6, 32.7]],
+  ["MAGNESIO INOSITOL 300G", 269.9, [107.96, 104.18, 100.53, 97.01, 93.62, 88.94, 84.05]],
+  ["TESTO CYCLE", 124.9, [48.36, 47.72, 45.58, 44.9, 43.77, 42.28, 39.91]],
+  ["CAPTAIN GAINER", 319.9, [131.56, 129.97, 127.67, 122.63, 119.11, 116.52, 114.24]],
+  ["BAKED BAR - BUENISSIMO", 224.9, [79.84, 78.37, 76.89, 75.42, 73.93, 72.47, 70.98]],
+].reduce((m, [nome, tabela, precos]) => {
+  m[nome] = { nome, tabela, precos };
+  return m;
+}, {});
+
+/* Contam como proteína no limite de 50%. O resto do catálogo é mix. */
+const PROTEINAS = new Set([
+  "100% WHEY CRUSH",
+  "PROTEIN CRUSH 450G",
+  "PROTEIN CRUSH 900G",
+  "BEEF PROTEIN CRUSH",
+]);
+
+/* Bonificação por faixa — percentual sobre o total de mix.
+   PENDENTE: assim que a tabela chegar, preencher aqui na mesma ordem das FAIXAS. */
+const BONIFICACAO_POR_FAIXA = null; // ex.: [0.03, 0.035, 0.04, 0.045, 0.05, 0.055, 0.06]
+
+/* ============================================================
+   DE-PARA: SKU do ERP -> produto da campanha
+   O nome no ERP traz sabor e gramatura ("100% WHEY CRUSH
+   CONCENTRADA 900G CHOCOBEAR"), então o casamento é por padrão.
+   ============================================================ */
+function normalizar(txt) {
+  return String(txt ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim();
+}
+
+const CACHE_MAPA = new Map();
+
+function mapearProduto(codigo, produto) {
+  const cod = String(codigo ?? "").trim().toUpperCase();
+  const chave = cod + "|" + produto;
+  if (CACHE_MAPA.has(chave)) return CACHE_MAPA.get(chave);
+  const r = calcularMapa(cod, produto);
+  CACHE_MAPA.set(chave, r);
+  return r;
+}
+
+function calcularMapa(cod, produto) {
+  if (cod.startsWith("ACE")) return { produto: null, familia: "vestuário/acessório" };
+  if (cod.startsWith("EMB")) return { produto: null, familia: "embalagem" };
+  const n = normalizar(produto);
+  const tem = (...ps) => ps.every((p) => n.includes(p));
+  const ok = (nome) => ({ produto: TABELA[nome] || null, familia: "produto" });
+
+  if (tem("ISO HYDRO CLINICAL") || tem("ISOHYDRO", "CLINICAL")) return ok("ISO HYDRO CLINICAL 450G");
+  if (tem("ISOHYDRO") || tem("ISO HYDRO")) return ok("ISO HYDRO CRUSH");
+  if (tem("100 WHEY CRUSH")) return ok("100% WHEY CRUSH");
+  if (tem("BEEF PROTEIN")) return ok("BEEF PROTEIN CRUSH");
+  if (tem("PROTEIN CRUSH")) {
+    if (n.includes("900")) return ok("PROTEIN CRUSH 900G");
+    if (n.includes("450")) return ok("PROTEIN CRUSH 450G");
+    return { produto: null, familia: "produto" };
+  }
+  if (tem("CAPTAIN GAINER")) return ok("CAPTAIN GAINER");
+  if (tem("WARZONE ROCKET")) return ok("WARZONE ROCKET ENERGY");
+  if (tem("WARZONE NIGHT")) return ok("WARZONE NIGHT BATTLE");
+  if (tem("DISPLAY", "FCKNG")) return ok("DISPLAY FCKNG BOOSTER");
+  if (tem("FCKNG BOOSTER")) {
+    if (n.includes("600")) return ok("FCKNG BOOSTER 600G");
+    if (n.includes("300")) return ok("FCKNG BOOSTER 300G");
+    return { produto: null, familia: "produto" };
+  }
+  if (tem("BUENISSIMO")) return ok("BAKED BAR - BUENISSIMO");
+  if (tem("BETA ALANINE")) return ok("BETA ALANINE 300G");
+  if (tem("TESTO CYCLE")) return ok("TESTO CYCLE");
+  if (tem("CARNITINE")) return ok("X-CARNITINE");
+  if (tem("GLUTAMINA")) return ok("GLUTAMINA 300G");
+  if (tem("CREATINE")) {
+    if (n.includes("150")) return ok("CREATINE 150G");
+    if (n.includes("500")) return ok("CREATINE 500G");
+    if (n.includes("300"))
+      return n.includes("BORNTODISRUPT") ? ok("CREATINE 300G") : ok("CREATINE SABOR 300G");
+    return { produto: null, familia: "produto" };
+  }
+  if (tem("DIMETHYLEX")) {
+    if (n.includes("STIM FREE")) return ok("DIMETHYLEX STIM FREE");
+    if (n.includes("TIME RELEASE")) return ok("DIMETHYLEX TIME RELEASE");
+    return ok("DIMETHYLEX");
+  }
+  if (tem("MULTIVITAMINICO")) return ok("MULTIVITAMINICO 90 CAPS");
+  if (tem("OMEGA")) {
+    if (n.includes("120")) return ok("OMEGA ULTRA 120 CAPS");
+    if (n.includes("60")) return ok("OMEGA ULTRA 60 CAPS");
+    return { produto: null, familia: "produto" };
+  }
+  if (tem("COQ")) return ok("COQ-10 60 CAPS");
+  if (tem("CAFEINA")) return ok("CAFEINA 60 CAPS");
+  if (tem("OSTEO")) return ok("OSTEO REPAIR 60 CAPS");
+  if (tem("MAGNESIO")) return ok("MAGNESIO INOSITOL 300G");
+  if (tem("RAMPAGE")) return ok("RAMPAGE 300G");
+  if (tem("CLEMBUTER")) return ok("CLEMBUTER UNDER");
+  return { produto: null, familia: "produto" };
+}
+
+/* ============================ utilitários ============================ */
+function paraNumero(bruto) {
+  if (typeof bruto === "number") return bruto;
+  let t = String(bruto ?? "").trim();
+  if (!t) return null;
+  t = t.replace(/R\$/gi, "").replace(/\s/g, "");
+  const v = t.includes(","), p = t.includes(".");
+  if (v && p) t = t.replace(/\./g, "").replace(",", ".");
+  else if (v) t = t.replace(",", ".");
+  else if (p && !/\.\d{1,2}$/.test(t)) t = t.replace(/\./g, "");
+  const n = Number(t);
+  return Number.isFinite(n) ? n : null;
+}
+
+const moeda = (n) =>
+  n == null ? "—" : n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+function faixaDe(total) {
+  if (total == null || total <= 0) return null;
+  // conta quantos tetos o pedido ultrapassou (com 2% de tolerância)
+  let degraus = 0;
+  FAIXAS.forEach((f) => {
+    if (total >= f.teto * (1 - TOLERANCIA)) degraus += 1;
+  });
+  const indice = Math.min(degraus, FAIXAS.length - 1);
+  const ultimo = degraus > 0 ? FAIXAS[degraus - 1] : null; // o teto que ele passou
+  return {
+    ...FAIXAS[indice],
+    indice,
+    tolerada: !!ultimo && total < ultimo.teto,
+    falta: ultimo ? Number((ultimo.teto - total).toFixed(2)) : 0,
+    noTopo: indice >= FAIXAS.length - 1,
+    carta: indice < FAIXAS.length - 1 ? { ...FAIXAS[indice + 1], indice: indice + 1 } : null,
+  };
+}
+
+/* Catálogo por vigência. Setembro repetiu exatamente os preços de agosto e
+   apenas retirou quatro produtos. Se algum mês trouxer preço diferente,
+   duplicar o bloco de preços em vez de reaproveitar. */
+const FORA_EM_SETEMBRO = [
+  "ISO HYDRO CRUSH",
+  "CLEMBUTER UNDER",
+  "DIMETHYLEX TIME RELEASE",
+  "DISPLAY FCKNG BOOSTER",
+];
+
+const CATALOGOS = [
+  { de: "2026-09-01", ate: "2026-09-30", fora: FORA_EM_SETEMBRO, nome: "setembro" },
+];
+
+function catalogoDe(dataPedido) {
+  const d = paraData(dataPedido);
+  const c = d && CATALOGOS.find((x) => d >= chaveData(x.de) && d <= chaveData(x.ate));
+  return {
+    nome: c ? c.nome : "agosto",
+    fora: new Set(c ? c.fora : []),
+  };
+}
+
+/* ---------- kits de setembro ----------
+   O preço do kit só vale com todos os itens juntos e nas quantidades
+   indicadas. Faltando quantidade, o validador avisa mas não reprova. */
+const KITS = [
+  {
+    nome: "Kit Protein Crush",
+    de: "2026-09-01", ate: "2026-09-30",
+    total: 26807.2,
+    itens: [
+      { produto: "PROTEIN CRUSH 900G", qtde: 200, preco: 89.97 },
+      { produto: "CREATINE SABOR 300G", qtde: 120, preco: 29.87 },
+      { produto: "RAMPAGE 300G", qtde: 80, preco: 65.36 },
+    ],
+  },
+  {
+    nome: "Kit Testo Cycle",
+    de: "2026-09-01", ate: "2026-09-30",
+    total: 3026.8,
+    itens: [
+      { produto: "TESTO CYCLE", qtde: 40, preco: 39.91 },
+      // o material imprime R$ 59,90, mas os 73,50% e o total do kit dão R$ 59,60,
+      // que é o valor oficial. O impresso segue reconhecido para apontamento.
+      { produto: "BAKED BAR - BUENISSIMO", qtde: 24, preco: 59.6, alternativo: 59.9 },
+    ],
+  },
+  {
+    nome: "Kit Clinical Series",
+    de: "2026-09-01", ate: "2026-09-30",
+    total: 4988.28,
+    // todos os preços deste kit são os da coluna de R$ 200.000 da tabela
+    itens: [
+      { produto: "OMEGA ULTRA 120 CAPS", qtde: 12, preco: 79.84 },
+      { produto: "OMEGA ULTRA 60 CAPS", qtde: 24, preco: 43.1 },
+      { produto: "CAFEINA 60 CAPS", qtde: 24, preco: 21.76 },
+      { produto: "OSTEO REPAIR 60 CAPS", qtde: 12, preco: 45.77 },
+      { produto: "MAGNESIO INOSITOL 300G", qtde: 12, preco: 84.05 },
+      { produto: "MULTIVITAMINICO 90 CAPS", qtde: 12, preco: 32.7 },
+      { produto: "COQ-10 60 CAPS", qtde: 12, preco: 43.61 },
+    ],
+    bonificacao: { produto: "ISO HYDRO CLINICAL 450G", qtde: 6, valor: 1065.54 },
+  },
+  {
+    nome: "Kit Beef + Creatina",
+    de: "2026-09-01", ate: "2026-09-30",
+    total: 5275.2, // 48 kits a R$ 109,90
+    // Kit fechado: 1 creatina 300g + 1 beef, R$ 109,90 o par, mínimo 48 kits.
+    // Os dois itens não podem ser trocados por outros.
+    // O material cita 69,40% na beef e 86,29% na creatina, que somam R$ 109,97.
+    // Como o par é o número firme, aceito as duas divisões que fecham 109,90.
+    proporcional: true,
+    parPreco: 109.9,
+    parAlternativo: 109.97, // soma dos percentuais impressos (69,40% + 86,29%)
+    itens: [
+      { produto: "BEEF PROTEIN CRUSH", qtde: 48, preco: 89.96, alternativo: 89.9 },
+      { produto: "CREATINE 300G", qtde: 48, preco: 20.0, alternativo: 19.94 },
+    ],
+  },
+];
+
+/* ---------- condição especial de volume em creatina ----------
+   Preço por compromisso de volume, com piso de fechamento. Nesses itens
+   o à vista cai para 3% e o cartão não dá desconto adicional. */
+const VOLUME_CREATINA = {
+  de: "2026-09-01", ate: "2026-09-30",
+  descontoVista: 0.03,
+  descontoCartao: 0,
+  degraus: [
+    { rotulo: "500 un", compromisso: 500, minimo: 250, precos: { "CREATINE 300G": 26.41, "CREATINE SABOR 300G": 29.87 } },
+    { rotulo: "250 un", compromisso: 250, minimo: 120, precos: { "CREATINE 300G": 27.9, "CREATINE SABOR 300G": 31.55 } },
+    { rotulo: "250 un", compromisso: 250, minimo: 120, precos: { "CREATINE 500G": 39.9 } },
+    { rotulo: "120 un", compromisso: 120, minimo: 60, precos: { "CREATINE 500G": 44.9 } },
+    { rotulo: "200 un", compromisso: 200, minimo: 80, precos: { "CREATINE 150G": 14.9 } },
+    { rotulo: "80 un", compromisso: 80, minimo: 40, precos: { "CREATINE 150G": 17.9 } },
+  ],
+};
+
+const dentroDaVigencia = (data, faixa) => {
+  const d = paraData(data);
+  return !!d && d >= chaveData(faixa.de) && d <= chaveData(faixa.ate);
+};
+
+/* Soma a quantidade de cada produto da campanha na negociação inteira */
+function somarPorProduto(validos) {
+  const m = new Map();
+  for (const i of validos) {
+    if (!i.produto) continue;
+    m.set(i.produto.nome, (m.get(i.produto.nome) || 0) + (i.qtde || 0));
+  }
+  return m;
+}
+
+/* Um item entra na condição de volume quando o preço bate com algum degrau.
+   Nesses itens o desconto de pagamento é diferente: 3% à vista, 0% no cartão. */
+function acharDegrauVolume(item, data) {
+  if (!item.produto || item.unit == null) return null;
+  if (!dentroDaVigencia(data, VOLUME_CREATINA)) return null;
+  const cond = String(item.condPgtoBruto ?? "");
+  const desc = /VISTA/i.test(cond)
+    ? VOLUME_CREATINA.descontoVista
+    : /CART[AÃ]O/i.test(cond)
+    ? VOLUME_CREATINA.descontoCartao
+    : 0;
+  for (const d of VOLUME_CREATINA.degraus) {
+    const alvo = d.precos[item.produto.nome];
+    if (alvo == null) continue;
+    if (Math.abs(item.unit - alvo * (1 - desc)) <= 0.03) return { degrau: d, alvo, desc };
+  }
+  return null;
+}
+
+function conferirVolumeCreatina(validos, data, motivos, explicados) {
+  const achados = [];
+  for (const i of validos) {
+    if (explicados.has(i)) continue; // já atribuído a um kit
+    const r = acharDegrauVolume(i, data);
+    if (r) { achados.push({ item: i, ...r }); explicados.add(i); }
+  }
+  if (!achados.length) return;
+
+  const somas = somarPorProduto(validos);
+  // creatina 300g pura e com sabor contam juntas no volume
+  const soma300 = (somas.get("CREATINE 300G") || 0) + (somas.get("CREATINE SABOR 300G") || 0);
+
+  const porDegrau = new Map();
+  for (const a of achados) {
+    if (!porDegrau.has(a.degrau)) porDegrau.set(a.degrau, []);
+    porDegrau.get(a.degrau).push(a);
+  }
+
+  for (const [degrau, itens] of porDegrau) {
+    const nomes = Object.keys(degrau.precos);
+    const ehTrezentos = nomes.includes("CREATINE 300G");
+    const qtde = ehTrezentos ? soma300 : nomes.reduce((s, n) => s + (somas.get(n) || 0), 0);
+    const rotulo = ehTrezentos ? "creatina 300g (pura + sabor)" : nomes.join(" + ").toLowerCase();
+
+    if (qtde < degrau.minimo) {
+      motivos.push({
+        nivel: "erro",
+        texto:
+          `Condição de volume em creatina: preço do degrau de ${degrau.rotulo} aplicado, mas o pedido ` +
+          `tem só ${qtde} un de ${rotulo}. O piso para fechar esse preço é ${degrau.minimo} un`,
+      });
+    } else if (qtde < degrau.compromisso) {
+      motivos.push({
+        nivel: "alerta",
+        texto:
+          `Condição de volume em creatina: ${qtde} un de ${rotulo}, abaixo do compromisso de ` +
+          `${degrau.compromisso} un mas dentro do piso de ${degrau.minimo} un — preço permitido`,
+      });
+    } else {
+      motivos.push({
+        nivel: "info",
+        texto: `Condição de volume em creatina: ${qtde} un de ${rotulo}, compromisso de ${degrau.compromisso} un cumprido`,
+      });
+    }
+    if (itens.some((a) => a.desc > 0)) {
+      motivos.push({
+        nivel: "info",
+        texto: "Itens da condição de volume: à vista vale 3%, cartão não dá desconto adicional e não geram bonificação",
+      });
+    }
+  }
+}
+
+/* Degrau devido conforme a quantidade do próprio produto na negociação */
+function degrauPorQuantidade(nomeProduto, qtde) {
+  const degraus = CAMPANHA_PROTEINA.produtos[nomeProduto];
+  if (!degraus) return null;
+  let achado = null;
+  for (const d of degraus) if (qtde >= d.qtde) achado = d;
+  return achado;
+}
+
+/* Pedido só de proteína: o preço não vem da tabela por faixa, e sim da
+   campanha de proteína, no degrau correspondente à quantidade comprada. */
+function conferirSoProteina(validos, neg, data, motivos, divergentes, explicados) {
+  for (const i of validos) {
+    if (!i.produto || i.bruto == null) continue;
+    explicados.add(i);
+    const qtde = neg.somas.get(i.produto.nome) || 0;
+    const degrau = degrauPorQuantidade(i.produto.nome, qtde);
+
+    if (!degrau) {
+      motivos.push({
+        nivel: "alerta",
+        texto:
+          `${i.produto.nome}: ${qtde} un na negociação, abaixo das ` +
+          `${CAMPANHA_PROTEINA.produtos[i.produto.nome][0].qtde} un do primeiro degrau da campanha`,
+      });
+      continue;
+    }
+
+    const bate =
+      Math.abs(i.bruto - degrau.preco) <= 0.03 ||
+      (degrau.alternativo != null && Math.abs(i.bruto - degrau.alternativo) <= 0.03);
+    if (bate) {
+      if (degrau.alternativo != null && Math.abs(i.bruto - degrau.alternativo) <= 0.03) {
+        motivos.push({
+          nivel: "alerta",
+          texto:
+            `${i.produto.nome} a ${moeda(degrau.alternativo)}, que é o valor do percentual ` +
+            `impresso. A tabela da campanha traz ${moeda(degrau.preco)}`,
+        });
+      }
+      continue;
+    }
+
+    // preço fora do degrau: abaixo prejudica a empresa, acima é negociação
+    const outro = (CAMPANHA_PROTEINA.produtos[i.produto.nome] || []).find(
+      (d) => Math.abs(i.bruto - d.preco) <= 0.03
+    );
+    const dif = Number((i.bruto - degrau.preco).toFixed(2));
+    divergentes.push({
+      ...i,
+      esperado: degrau.preco,
+      dif,
+      faixaOutra: -1,
+      pista: outro
+        ? `preço do degrau de ${outro.qtde} un, mas a negociação tem ${qtde} un`
+        : "fora da tabela da campanha de proteína",
+      nivel: dif < 0 ? "erro" : "info",
+    });
+  }
+
+  motivos.push({
+    nivel: "info",
+    texto:
+      `${CAMPANHA_PROTEINA.nome}: pedido só de proteína, conferido pela tabela da campanha ` +
+      `(24 / 48 / 96 un por produto). O teto de proteína não se aplica`,
+  });
+}
+
+/* Kit fechado (1 para 1): o número firme é o preço do PAR, não a divisão entre
+   os itens. O material cita percentuais que somam R$ 109,97, sete centavos
+   acima do kit, então qualquer divisão que feche o par é aceita. */
+function conferirKitProporcional(kit, validos, somas, motivos, explicados) {
+  const nota = (nivel, texto) => motivos.push({ nivel, texto, kit: true });
+  const porProduto = kit.itens.map((k) =>
+    validos.filter((i) => i.produto && i.produto.nome === k.produto && i.bruto != null)
+  );
+  if (porProduto.some((lista) => !lista.length)) return false;
+
+  // O Kit Beef+Creatina tem desconto próprio (10% à vista, 5% cartão), diferente
+  // do padrão 8%/3%. Refaço o bruto de cada item com o desconto do kit, senão o
+  // par de R$ 109,90 não fecharia em pedido à vista ou cartão.
+  const brutoKit = (i) => {
+    const d = CONDICOES_KIT[i.pagto.rotulo];
+    return d != null ? Number((i.unit / (1 - d)).toFixed(2)) : i.bruto;
+  };
+
+  // preço unitário médio de cada produto, ponderado pela quantidade
+  const medio = porProduto.map((lista) => {
+    const q = lista.reduce((s, i) => s + (i.qtde || 0), 0);
+    return q ? lista.reduce((s, i) => s + brutoKit(i) * (i.qtde || 0), 0) / q : brutoKit(lista[0]);
+  });
+  const par = Number(medio.reduce((s, v) => s + v, 0).toFixed(2));
+  if (Math.abs(par - kit.parPreco) > 0.5) return false; // não é este kit
+
+  porProduto.flat().forEach((i) => explicados.add(i));
+  const qtdes = kit.itens.map((k) => somas.get(k.produto) || 0);
+  const minimo = kit.itens[0].qtde;
+
+  if (!qtdes.every((q) => q === qtdes[0])) {
+    nota("alerta",
+      `${kit.nome}: as quantidades não fecham em pares — ` +
+      kit.itens.map((k, ix) => `${k.produto} ${qtdes[ix]} un`).join(", ") +
+      ". O kit é um para um e os itens não podem ser trocados");
+    return true;
+  }
+  if (Math.abs(par - kit.parPreco) > 0.03) {
+    // o par alternativo (soma dos percentuais impressos) também é aceito
+    if (kit.parAlternativo != null && Math.abs(par - kit.parAlternativo) <= 0.03) {
+      nota("info",
+        `${kit.nome}: ${qtdes[0]} kits a ${moeda(par)} o par (valor dos percentuais ` +
+        `impressos; o material também cita ${moeda(kit.parPreco)}), composição conferida`);
+      return true;
+    }
+    nota("erro", `${kit.nome}: o par saiu a ${moeda(par)} e deveria ser ${moeda(kit.parPreco)}`);
+    return true;
+  }
+  if (qtdes[0] < minimo) {
+    nota("alerta",
+      `${kit.nome}: ${qtdes[0]} kits no pedido, abaixo do mínimo de ${minimo}. ` +
+      `O preço de ${moeda(kit.parPreco)} o par vale a partir de ${minimo} kits`);
+    return true;
+  }
+  nota("info",
+    `${kit.nome}: ${qtdes[0]} kits a ${moeda(kit.parPreco)} o par, composição conferida ` +
+    `(${moeda(qtdes[0] * kit.parPreco)})`);
+  return true;
+}
+
+function conferirKits(validos, data, motivos, explicados, faixa) {
+  const somas = somarPorProduto(validos);
+  let achou = false;
+  const marcar = (n) => { for (let i = n; i < motivos.length; i++) motivos[i].kit = true; };
+  for (const kit of KITS) {
+    if (!dentroDaVigencia(data, kit)) continue;
+    if (kit.proporcional) {
+      if (conferirKitProporcional(kit, validos, somas, motivos, explicados)) achou = true;
+      continue;
+    }
+    const antes = motivos.length;
+    // o kit é invocado quando algum item sai no preço dele
+    const usados = validos.filter((i) => {
+      if (!i.produto || i.bruto == null) return false;
+      const linha = kit.itens.find((k) => k.produto === i.produto.nome);
+      if (!linha) return false;
+      // o Clinical Series usa os preços da coluna de R$ 200.000; se o pedido
+      // já tem direito a essa faixa, o preço se explica sozinho e não é kit
+      const jaCertoPelaFaixa =
+        faixa && Math.abs(i.bruto - i.produto.precos[faixa.indice]) <= 0.03;
+      if (jaCertoPelaFaixa) return false;
+      return (
+        Math.abs(i.bruto - linha.preco) <= 0.03 ||
+        (linha.alternativo != null && Math.abs(i.bruto - linha.alternativo) <= 0.03)
+      );
+    });
+    const distintos = new Set(usados.map((i) => i.produto.nome));
+    // CREATINE SABOR a R$29,87 existe no kit e na condição de volume; só
+    // atribuímos ao kit quando outro item do kit também aparece no preço dele
+    if (distintos.size < Math.min(2, kit.itens.length)) continue;
+    achou = true;
+    usados.forEach((i) => explicados.add(i));
+
+    // item cobrado pelo valor impresso no material, que diverge do oficial
+    for (const i of usados) {
+      const linha = kit.itens.find((k) => k.produto === i.produto.nome);
+      if (linha.alternativo == null) continue;
+      if (Math.abs(i.bruto - linha.alternativo) > 0.03) continue;
+      const dif = (linha.alternativo - linha.preco) * (i.qtde || 0);
+      motivos.push({
+        nivel: "alerta",
+        texto:
+          `${kit.nome}: ${i.produto.nome} saiu a ${moeda(linha.alternativo)}, valor impresso no ` +
+          `material. O correto é ${moeda(linha.preco)} — ${moeda(dif)} a mais no pedido`,
+      });
+    }
+
+    const faltas = [];
+    for (const k of kit.itens) {
+      const tem = somas.get(k.produto) || 0;
+      if (tem < k.qtde) faltas.push(`${k.produto}: ${tem} de ${k.qtde} un`);
+    }
+    if (faltas.length) {
+      motivos.push({
+        nivel: "alerta",
+        texto:
+          `${kit.nome}: preço de kit aplicado sem a composição completa. ${faltas.join("; ")}. ` +
+          `O preço só vale com todos os itens nas quantidades do kit`,
+      });
+    } else {
+      motivos.push({
+        nivel: "info",
+        texto:
+          `${kit.nome}: composição completa conferida, preço de kit válido (${moeda(kit.total)})` +
+          (kit.bonificacao
+            ? `. Rende bonificação de ${kit.bonificacao.qtde} un de ` +
+              `${kit.bonificacao.produto} (${moeda(kit.bonificacao.valor)}), que vem em pedido à parte`
+            : ""),
+      });
+    }
+    marcar(antes);
+  }
+  return achou;
+}
+
+/* ---------- campanha de proteína de setembro ----------
+   Preço por unidade conforme o volume do próprio produto. Usando esta tabela,
+   o pedido pode chegar a 100% de proteína — o teto da regra geral não se aplica. */
+const CAMPANHA_PROTEINA = {
+  nome: "Campanha de proteína de setembro",
+  de: "2026-09-01", ate: "2026-09-30",
+  produtos: {
+    "PROTEIN CRUSH 450G": [
+      // o material imprime R$ 84,80; os 46,90% sobre a tabela dariam R$ 84,90
+      { qtde: 24, preco: 84.8, alternativo: 84.9 },
+      { qtde: 48, preco: 79.9 },
+      { qtde: 96, preco: 74.9 },
+    ],
+    "PROTEIN CRUSH 900G": [
+      { qtde: 24, preco: 159.9 },
+      { qtde: 48, preco: 149.9 },
+      { qtde: 96, preco: 139.9 },
+    ],
+    "BEEF PROTEIN CRUSH": [
+      { qtde: 24, preco: 149.9 },
+      { qtde: 48, preco: 139.9 },
+      { qtde: 96, preco: 129.9 },
+    ],
+    "100% WHEY CRUSH": [
+      { qtde: 24, preco: 169.9 },
+      { qtde: 48, preco: 159.9 },
+      { qtde: 96, preco: 149.9 },
+    ],
+  },
+};
+
+/* Devolve o degrau da campanha de proteína que o item está usando, se houver */
+function acharDegrauProteina(item, data) {
+  if (!item.produto || item.bruto == null) return null;
+  if (!dentroDaVigencia(data, CAMPANHA_PROTEINA)) return null;
+  const degraus = CAMPANHA_PROTEINA.produtos[item.produto.nome];
+  if (!degraus) return null;
+  return (
+    degraus.find(
+      (d) =>
+        Math.abs(item.bruto - d.preco) <= 0.03 ||
+        (d.alternativo != null && Math.abs(item.bruto - d.alternativo) <= 0.03)
+    ) || null
+  );
+}
+
+/* ============================================================
+   MARGEM DE CONTRIBUIÇÃO
+   Custos da planilha "Precificação 27/08/2026", aba Motor de
+   Precificação, coluna E. Os 33 preços daquela planilha conferem
+   com a tabela da campanha, o que valida o de-para.
+   ============================================================ */
+const CUSTOS = {
+  "100% WHEY CRUSH": 58.7786, "ISO HYDRO CRUSH": 83.312, "ISO HYDRO CLINICAL 450G": 44.9885,
+  "PROTEIN CRUSH 450G": 27.8738, "PROTEIN CRUSH 900G": 51.9438, "BEEF PROTEIN CRUSH": 47.23,
+  "CLEMBUTER UNDER": 6.8551, "DIMETHYLEX": 6.4322, "DIMETHYLEX TIME RELEASE": 12.66,
+  "DIMETHYLEX STIM FREE": 6.2786, "X-CARNITINE": 12.5525, "FCKNG BOOSTER 300G": 8.3696,
+  "FCKNG BOOSTER 600G": 13.8529, "DISPLAY FCKNG BOOSTER": 27.3654, "RAMPAGE 300G": 9.194,
+  "WARZONE NIGHT BATTLE": 14.0498, "WARZONE ROCKET ENERGY": 24.709, "BETA ALANINE 300G": 7.062,
+  "CREATINE 150G": 4.5728, "CREATINE 300G": 7.1203, "CREATINE SABOR 300G": 8.1714,
+  "CREATINE 500G": 11.3689, "GLUTAMINA 300G": 14.4249, "COQ-10 60 CAPS": 15.4726,
+  "OMEGA ULTRA 60 CAPS": 14.5563, "OMEGA ULTRA 120 CAPS": 27.8303, "CAFEINA 60 CAPS": 6.32,
+  "OSTEO REPAIR 60 CAPS": 12.4544, "MULTIVITAMINICO 90 CAPS": 12.2738,
+  "MAGNESIO INOSITOL 300G": 22.72, "TESTO CYCLE": 8.7521, "CAPTAIN GAINER": 43.2227,
+  "BAKED BAR - BUENISSIMO": 36.2254,
+};
+
+/* Dois CDs: Norte e Nordeste saem do RN, o resto do país sai de SP */
+const NORTE_NORDESTE = new Set([
+  "AC", "AM", "AP", "PA", "RO", "RR", "TO",
+  "AL", "BA", "CE", "MA", "PB", "PE", "PI", "RN", "SE",
+]);
+const SP_DOZE = new Set(["MG", "RJ", "PR", "SC", "RS"]);
+
+function icmsDe(uf) {
+  const u = String(uf ?? "").trim().toUpperCase();
+  if (!u) return { cd: "SP", aliquota: 0.18, incerto: true };
+  if (NORTE_NORDESTE.has(u)) return { cd: "RN", aliquota: u === "RN" ? 0.17 : 0.12 };
+  if (u === "SP") return { cd: "SP", aliquota: 0.18 };
+  if (SP_DOZE.has(u)) return { cd: "SP", aliquota: 0.12 };
+  return { cd: "SP", aliquota: 0.07 };
+}
+
+const DEDUCOES = { comissao: 0.07, frete: 0.031, pis: 0, financeiro: 0.045 };
+const MC_META = 0.3;      // a partir daqui, aprovado
+const MC_DIRETORIA = 0.25; // entre 25% e 30%, analisar
+
+/* MC sobre o faturamento: o que sobra depois das deduções e do custo */
+function margemDe(itens, uf) {
+  const { cd, aliquota, incerto } = icmsDe(uf);
+  let faturamento = 0, comCusto = 0, custo = 0, financeiro = 0;
+  const porItem = [];
+  for (const i of itens) {
+    faturamento += i.total;
+    const c = i.produto ? CUSTOS[i.produto.nome] : null;
+    // o custo financeiro vem da própria condição de pagamento da linha
+    const fin = i.pagto.financeiro;
+    financeiro += i.total * fin;
+    if (c == null) continue;
+    comCusto += i.total;
+    const cItem = c * (i.qtde || 0);
+    custo += cItem;
+    const ded = i.total * (DEDUCOES.comissao + DEDUCOES.frete + aliquota + fin + DEDUCOES.pis);
+    const mcItem = i.total - ded - cItem;
+    const liqItem = i.total * (1 - aliquota);
+    porItem.push({ ...i, custoItem: cItem, mcItem, mcPctItem: liqItem > 0 ? mcItem / liqItem : 0 });
+  }
+  const deducoes =
+    faturamento * (DEDUCOES.comissao + DEDUCOES.frete + aliquota + DEDUCOES.pis) + financeiro;
+  const mc = faturamento - deducoes - custo;
+  // a MC é medida sobre a receita LÍQUIDA de ICMS, não sobre o faturamento
+  const liquida = faturamento * (1 - aliquota);
+  const condicoes = [...new Set(itens.map((i) => i.pagto.nome))];
+  return {
+    cd, aliquota, incerto, faturamento, liquida, custo, deducoes, financeiro, condicoes,
+    pctFinanceiro: faturamento > 0 ? financeiro / faturamento : 0,
+    mc, pct: liquida > 0 ? mc / liquida : 0,
+    pctSobreFaturamento: faturamento > 0 ? mc / faturamento : 0,
+    cobertura: faturamento > 0 ? comCusto / faturamento : 0,
+    porItem: porItem.sort((a, b) => a.mcPctItem - b.mcPctItem),
+  };
+}
+
+const ehBooleano = (v, alvo) => String(v ?? "").trim().toLowerCase() === alvo;
+
+/* O ERP já grava o preço unitário COM o desconto da condição de pagamento.
+   Para comparar com a tabela da campanha é preciso desfazer esse desconto. */
+/* Desconto padrão de pagamento embutido no preço do ERP: 8% à vista, 3% cartão.
+   O Kit Beef + Creatina tem desconto próprio (10% / 5%) — ver CONDICOES_KIT. */
+const CONDICOES = [
+  // antecipado e pix são pagamento à vista: não têm custo financeiro
+  { teste: /VISTA|ANTECIP|PIX/i, desconto: 0.08, financeiro: 0, rotulo: "à vista" },
+  { teste: /CART[AÃ]O/i, desconto: 0.03, financeiro: 0.045, rotulo: "cartão" },
+];
+
+/* Descontos exclusivos do Kit Beef + Creatina */
+const CONDICOES_KIT = {
+  "à vista": 0.10,
+  "cartão": 0.05,
+};
+
+function condicaoPagamento(txt) {
+  const c = CONDICOES.find((x) => x.teste.test(String(txt ?? "")));
+  if (!c) return { desconto: 0, financeiro: 0.045, nome: "a prazo", rotulo: "a prazo" };
+  return {
+    desconto: c.desconto,
+    financeiro: c.financeiro,
+    rotulo: c.rotulo,
+    nome: `${c.rotulo} −${(c.desconto * 100).toFixed(0)}%`,
+  };
+}
+
+const semDesconto = (v, desconto) =>
+  v == null ? null : Number((v / (1 - desconto)).toFixed(2));
+
+/* ============================ análise ============================ */
+const ehSemVencimento = (txt) => /S\s*\/\s*(VENC|VALOR)/i.test(String(txt ?? ""));
+
+/* Um pedido é de bonificação quando todas as suas linhas são bonificadas
+   ou estão na condição sem vencimento. Ele nunca entra na soma da negociação. */
+function pedidoEhBonificacao(linhas, cols) {
+  return linhas.every(
+    (l) => ehBooleano(l[cols.bonificado], "true") || ehSemVencimento(l[cols.condPgto])
+  );
+}
+
+/* Só entram na soma da negociação os pedidos vivos: liberados, em análise ou
+   faturados. Reprovado no comercial e cancelado ficam de fora. */
+function pedidoEntraNaSoma(linhas, cols) {
+  const lib = linhas.map((l) => String(l[cols.libComl] ?? "").trim().toLowerCase());
+  if (lib.some((v) => v === "false")) return false;
+  if (linhas.some((l) => normalizar(l[cols.status]).includes("CANCELADO"))) return false;
+  return true;
+}
+
+function montarItens(linhas, cols) {
+  const catalogo = catalogoDe(linhas[0]?.[cols.dataPedido]);
+  return linhas.map((l) => {
+    const codigo = String(l[cols.codigo] ?? "").trim();
+    const nomeErp = String(l[cols.produto] ?? "").trim();
+    const achado = mapearProduto(codigo, nomeErp);
+    const familia = achado.familia;
+    // produto que saiu do catálogo do mês não tem preço de campanha
+    const produto = achado.produto && catalogo.fora.has(achado.produto.nome) ? null : achado.produto;
+    const foraDoMes = !!achado.produto && !produto;
+    // cada linha traz a própria condição de pagamento, e o desconto dela
+    // já vem embutido no preço unitário gravado pelo ERP
+    const pagto = condicaoPagamento(l[cols.condPgto]);
+    const unit = paraNumero(l[cols.valUnit]);
+    const total = paraNumero(l[cols.valTotal]) ?? 0;
+    return {
+      codigo, nomeErp, produto, familia, pagto, foraDoMes,
+      condPgtoBruto: String(l[cols.condPgto] ?? ""),
+      pedido: String(l[cols.pedido] ?? "").trim(),
+      ehPA: codigo.toUpperCase().startsWith("PA"),
+      bonificado: ehBooleano(l[cols.bonificado], "true"),
+      qtde: paraNumero(l[cols.qtde]) ?? 0,
+      unit,
+      bruto: semDesconto(unit, pagto.desconto),
+      total,
+      totalBruto: semDesconto(total, pagto.desconto) ?? 0,
+    };
+  });
+}
+
+/* A condição comercial (faixa, proteína, habilitação) vale para a negociação
+   inteira — a soma dos pedidos do mesmo cliente na mesma data. */
+function resumirNegociacao(ids, linhas, cols) {
+  const validos = montarItens(linhas, cols).filter((i) => i.ehPA && !i.bonificado);
+  const total = Number(validos.reduce((s, i) => s + i.total, 0).toFixed(2));
+  const totalBruto = Number(validos.reduce((s, i) => s + i.totalBruto, 0).toFixed(2));
+  const proteina = Number(
+    validos.filter((i) => i.produto && PROTEINAS.has(i.produto.nome))
+      .reduce((s, i) => s + i.totalBruto, 0).toFixed(2)
+  );
+  const fatia = totalBruto > 0 ? proteina / totalBruto : 0;
+  const faixa = faixaDe(totalBruto);
+  const regime = regimeProteina(String(linhas[0]?.[cols.dataPedido] ?? "").trim());
+  const naTabela = validos.filter(
+    (i) => i.produto && i.bruto != null && i.produto.precos.some((p) => Math.abs(p - i.bruto) <= 0.03)
+  ).length;
+  const adesao = validos.length ? naTabela / validos.length : 0;
+  // negociação só de proteína dentro da vigência: vale a campanha de proteína,
+  // com preço por quantidade e sem teto de densidade
+  const data = String(linhas[0]?.[cols.dataPedido] ?? "").trim();
+  const somenteProteina =
+    validos.length > 0 &&
+    dentroDaVigencia(data, CAMPANHA_PROTEINA) &&
+    validos.every((i) => i.produto && PROTEINAS.has(i.produto.nome));
+  const teto = somenteProteina ? 1 : regime.teto;
+  return {
+    ids, total, totalBruto, proteina, somenteProteina, campanhaProteina: somenteProteina, teto,
+    somas: somarPorProduto(validos),
+    mix: Number((totalBruto - proteina).toFixed(2)),
+    fatia, faixa, regime,
+    habilitado: totalBruto > 0 && fatia <= teto + 1e-9,
+    naTabela, adesao,
+    tipo: adesao >= 0.8 ? "campanha" : adesao > 0 ? "misto" : "negociado",
+    itens: validos.length,
+  };
+}
+
+function analisarPedido(id, linhas, cols, titulos, neg) {
+  const cab = linhas[0];
+  const valores = (col) => linhas.map((l) => String(l[col] ?? "").trim());
+  const libComl = valores(cols.libComl);
+  const libFin = valores(cols.libFin);
+  const base = {
+    id,
+    pedidos: neg ? neg.ids : [id],
+    cliente: String(cab[cols.cliente] ?? "").trim(),
+    data: String(cab[cols.dataPedido] ?? "").trim(),
+    condPgto: [...new Set(valores(cols.condPgto).filter(Boolean))].join(" / "),
+    status: [...new Set(valores(cols.status).filter(Boolean))].join(" / "),
+    representante: cols.representante
+      ? [...new Set(valores(cols.representante).filter(Boolean))].join(" / ")
+      : "",
+    observacoes: cols.observacoes
+      ? [...new Set(valores(cols.observacoes).filter(Boolean))].join(" | ")
+      : "",
+    libComl: libComl.includes("") ? "" : libComl[0],
+    libFin: libFin.includes("") ? "" : libFin[0],
+    linhas: linhas.length,
+    cnpj: cols.cnpj ? normCnpj(cab[cols.cnpj]) : "",
+    doc: cols.cnpj ? formatarDoc(cab[cols.cnpj]) : "",
+    uf: cols.uf ? String(cab[cols.uf] ?? "").trim().toUpperCase() : "",
+    mercos: cols.mercos ? String(cab[cols.mercos] ?? "").trim() : "",
+  };
+  // usado só para manter os pedidos do mesmo cliente juntos na listagem —
+  // a bonificação entra aqui mesmo ficando fora da soma da negociação
+  base.grupo = `${base.cnpj || base.cliente}|${mesDe(base.data)}`;
+
+  // inadimplência reprova na entrada, antes de qualquer análise comercial.
+  // procura primeiro o CNPJ exato; não achando, olha a raiz (grupo econômico)
+  const exato = titulos && base.cnpj ? titulos.mapa.get(base.cnpj) || null : null;
+  // a raiz só identifica grupo em CNPJ; CPF preenchido com zeros geraria
+  // falso positivo entre pessoas físicas diferentes
+  const ehCnpj = String(cab[cols.cnpj] ?? "").replace(/\D/g, "").length === 14;
+  const grupoEc =
+    !exato && ehCnpj && titulos && base.cnpj
+      ? titulos.raizes.get(base.cnpj.slice(0, 8)) || null
+      : null;
+  const debito = exato || grupoEc;
+  // passivo total em aberto do cliente (vencido + a vencer), só informativo
+  const passivo =
+    titulos && base.cnpj
+      ? titulos.aberto?.get(base.cnpj) ||
+        (ehCnpj ? titulos.abertoRaiz?.get(base.cnpj.slice(0, 8)) : null) ||
+        null
+      : null;
+  const motivoDebito = debito
+    ? {
+        nivel: "erro",
+        texto:
+          (exato
+            ? "Cliente inadimplente: "
+            : `Grupo econômico inadimplente (raiz ${base.cnpj.slice(0, 8)}, ` +
+              `${grupoEc.empresas.size} ${grupoEc.empresas.size === 1 ? "CNPJ" : "CNPJs"}): `) +
+          `${debito.titulos} ${debito.titulos === 1 ? "título vencido" : "títulos vencidos"} ` +
+          `somando ${moeda(debito.valor)}, com até ${debito.maxAtraso} dias de atraso` +
+          (debito.situacoes.size ? ` (${[...debito.situacoes].join(", ")})` : ""),
+      }
+    : null;
+
+  const itens = montarItens(linhas, cols);
+  const bonificados = itens.filter((i) => i.bonificado);
+  const validos = itens.filter((i) => i.ehPA && !i.bonificado);
+
+  // pedido de bonificação: fica de fora da soma e é conferido à parte
+  if (!validos.length) {
+    return {
+      ...base, itens, debito, passivo, pedidos: [id],
+      tipo: "bonificacao",
+      veredito: debito ? "inadimplente" : "bonificacao",
+      totalBonificado: bonificados.reduce((s, i) => s + i.total, 0),
+      motivos: [
+        ...(motivoDebito ? [motivoDebito] : []),
+        ...(BONIFICACAO_POR_FAIXA
+          ? []
+          : [{ nivel: "alerta", texto: "Bonificação — tabela de percentual por faixa ainda não cadastrada no validador" }]),
+      ],
+      divergentes: [],
+    };
+  }
+
+  const total = Number(validos.reduce((s, i) => s + i.total, 0).toFixed(2));
+  const totalBruto = Number(validos.reduce((s, i) => s + i.totalBruto, 0).toFixed(2));
+  const pagto = { nome: [...new Set(validos.map((i) => i.pagto.nome))].join(" / ") };
+  const proteina = Number(
+    validos.filter((i) => i.produto && PROTEINAS.has(i.produto.nome))
+      .reduce((s, i) => s + i.totalBruto, 0).toFixed(2)
+  );
+
+  // a régua comercial vem da negociação, não deste pedido isolado
+  const { faixa, regime, habilitado, fatia } = neg;
+  let tipo = neg.tipo;
+  const irmaos = neg.ids.filter((x) => x !== id);
+
+  const motivos = [];
+  const divergentes = [];
+
+  if (String(base.libComl).toLowerCase() === "false" || normalizar(base.status).includes("CANCELADO")) {
+    motivos.push({
+      nivel: "info",
+      texto: "Pedido reprovado ou cancelado — não entra na soma da negociação do mês",
+    });
+  }
+
+  if (irmaos.length) {
+    motivos.push({
+      nivel: "info",
+      texto:
+        `Mais de um pedido: ${neg.ids.join(", ")} do mesmo cliente em ${mesDe(base.data)}. ` +
+        `A condição comercial saiu da soma dos ${neg.ids.length} pedidos do mês, ` +
+        `${moeda(neg.totalBruto)}, que dá a faixa ${neg.faixa ? neg.faixa.rotulo : "—"}`,
+    });
+  }
+
+  const margem = margemDe(validos, base.uf);
+  const motivoMC = (() => {
+    if (!margem.faturamento) return null;
+    const pct = `${(margem.pct * 100).toFixed(1)}%`;
+    const detalhe =
+      `${moeda(margem.mc)} sobre ${moeda(margem.liquida)} de receita líquida · ICMS ` +
+      `${(margem.aliquota * 100).toFixed(0)}% (CD ${margem.cd})` +
+      (margem.cobertura < 0.999
+        ? ` · custo conhecido de ${(margem.cobertura * 100).toFixed(0)}% do pedido`
+        : "");
+    if (margem.pct >= MC_META)
+      return { nivel: "info", texto: `Margem de contribuição ${pct} — acima da meta de 30%. ${detalhe}` };
+    if (margem.pct >= MC_DIRETORIA)
+      return {
+        nivel: "alerta",
+        texto: `Margem de contribuição ${pct} — entre 25% e 30%, analisar. ${detalhe}`,
+      };
+    return {
+      nivel: "erro",
+      texto: `Margem de contribuição ${pct} — abaixo do piso de 25%. ${detalhe}`,
+    };
+  })();
+
+  // kits e condição de volume têm preço próprio e valem mesmo quando o pedido
+  // é reprovado por outro motivo — rodam antes de qualquer bifurcação
+  const explicados = new Set();
+  if (neg.somenteProteina)
+    conferirSoProteina(validos, neg, base.data, motivos, divergentes, explicados);
+  const temKit = conferirKits(validos, base.data, motivos, explicados, faixa);
+  conferirVolumeCreatina(validos, base.data, motivos, explicados);
+  const temCampanhaPropria = explicados.size > 0;
+  // item coberto por kit, volume ou campanha de proteína tem preço próprio:
+  // o pedido não é "negociado" só porque não bate com a tabela por faixa
+  const semExplicacao = validos.filter((i) => !explicados.has(i));
+  if (tipo === "negociado" && !semExplicacao.length) tipo = "campanha";
+
+  if (tipo === "negociado") {
+    // nenhum item bate com a campanha. Não dá para cobrar faixa, mas o pedido
+    // precisa ser conferido — pode ser kit ou campanha de precificação própria.
+    // PENDENTE: cadastrar aqui os parâmetros dos kits para conferência automática.
+    if (semExplicacao.length) {
+      motivos.push({
+        nivel: "alerta",
+        texto:
+          `Preço negociado: ${semExplicacao.length} de ${validos.length} itens não correspondem ` +
+          `à tabela Under's Brothers nem a kit ou condição de volume. Conferir na mão`,
+      });
+    }
+    for (const i of semExplicacao) {
+      if (!i.produto || i.bruto == null) continue;
+      divergentes.push({
+        ...i,
+        esperado: i.produto.precos[faixa ? faixa.indice : 0],
+        dif: null,
+        faixaOutra: -1,
+        descTabela: 1 - i.bruto / i.produto.tabela,
+        pista: `${((1 - i.bruto / i.produto.tabela) * 100).toFixed(1)}% sobre a tabela cheia de ${moeda(i.produto.tabela)}`,
+        nivel: "alerta",
+      });
+    }
+  } else {
+    if (!habilitado) {
+      const tirar = (neg.proteina - neg.teto * neg.totalBruto) / (1 - neg.teto);
+      const somar = neg.proteina / neg.teto - neg.totalBruto;
+      motivos.push({
+        nivel: "erro",
+        texto:
+          `Não habilitado à campanha: proteína é ${(fatia * 100).toFixed(1)}% ` +
+          `${irmaos.length ? "da negociação" : "do pedido"} ` +
+          `(${moeda(neg.proteina)} de ${moeda(neg.totalBruto)}), acima do teto de ` +
+          `${(neg.teto * 100).toFixed(0)}% (${regime.nome}). Falta tirar ${moeda(tirar)} ` +
+          `em proteína ou somar ${moeda(somar)} em mix`,
+      });
+    } else if (fatia > regime.limite && !neg.campanhaProteina) {
+      motivos.push({
+        nivel: "aviso",
+        texto:
+          `Proteína em ${(fatia * 100).toFixed(1)}%, acima do limite de ` +
+          `${(regime.limite * 100).toFixed(0)}% — habilitado pela tolerância de ` +
+          `${(TOLERANCIA_PROTEINA * 100).toFixed(0)} pontos percentuais`,
+      });
+    }
+    if (regime.semData) {
+      motivos.push({ nivel: "alerta", texto: "Pedido sem data legível — aplicada a regra padrão de proteína" });
+    } else if (regime.excecao && fatia > LIMITE_PADRAO && !neg.campanhaProteina) {
+      motivos.push({
+        nivel: "aviso",
+        texto:
+          `Só se habilita pela ${regime.nome}, que vai até ` +
+          `${VIGENCIAS.find((v) => v.nome === regime.nome).ate.split("-").reverse().join("/")}. ` +
+          `Pela regra padrão de ${(LIMITE_PADRAO * 100).toFixed(0)}%, estaria bloqueado`,
+      });
+    }
+    if (faixa && faixa.tolerada) {
+      motivos.push({
+        nivel: "aviso",
+        texto:
+          `Faltam ${moeda(faixa.falta)} para fechar os ${moeda(neg.totalBruto + faixa.falta)} ` +
+          `— subiu para a faixa ${faixa.rotulo} pela tolerância de 2%`,
+      });
+    }
+    if (tipo === "misto" && !temCampanhaPropria) {
+      motivos.push({
+        nivel: "alerta",
+        texto: `${neg.naTabela} de ${neg.itens} itens com preço de campanha — o resto está em preço negociado`,
+      });
+    }
+
+    if (habilitado && faixa) {
+      const ixCarta = faixa.carta ? faixa.carta.indice : -1;
+      for (const i of validos) {
+        if (explicados.has(i)) continue;
+        if (i.foraDoMes) {
+          motivos.push({
+            nivel: "alerta",
+            texto: `${i.nomeErp} saiu da tabela em ${catalogoDe(base.data).nome} — conferir o preço na mão`,
+          });
+          continue;
+        }
+        if (!i.produto) {
+          motivos.push({ nivel: "alerta", texto: `${i.codigo} ${i.nomeErp} não está na tabela da campanha` });
+          continue;
+        }
+        if (i.unit == null || i.bruto == null) continue;
+        const esperado = i.produto.precos[faixa.indice];
+        const dif = Number((i.bruto - esperado).toFixed(2));
+        if (Math.abs(dif) <= 0.03) continue;
+        const outra = i.produto.precos.findIndex((p) => Math.abs(p - i.bruto) <= 0.03);
+        const ehCarta = outra >= 0 && outra === ixCarta;
+        // índice menor = coluna mais cara. O cliente paga mais do que teria
+        // direito, o que é negociação válida: o representante não é obrigado
+        // a descer de tabela
+        const tabelaMaisCara = outra >= 0 && outra < faixa.indice;
+        divergentes.push({
+          ...i, esperado, dif, faixaOutra: outra, ehCarta,
+          pista: ehCarta
+            ? `Carta na Manga — faixa ${FAIXAS[outra].rotulo}`
+            : tabelaMaisCara
+            ? `preço da faixa ${FAIXAS[outra].rotulo}, acima do devido — negociação válida`
+            : outra >= 0
+            ? `preço da faixa ${FAIXAS[outra].rotulo}`
+            : "preço negociado, fora da tabela",
+          // uma faixa acima é Carta na Manga, que o comercial pode conceder;
+          // duas ou mais é faixa errada; tabela mais cara não prejudica a empresa
+          nivel: ehCarta ? "carta" : tabelaMaisCara ? "info" : outra >= 0 && dif < 0 ? "erro" : "alerta",
+        });
+      }
+
+      // se a maioria dos itens veio da mesma faixa, o problema (ou a concessão)
+      // é do pedido inteiro, não item a item — vale dizer isso de uma vez só
+      const porFaixa = new Map();
+      for (const d of divergentes) {
+        if (d.faixaOutra < 0) continue;
+        porFaixa.set(d.faixaOutra, (porFaixa.get(d.faixaOutra) || 0) + 1);
+      }
+      let dominante = -1, maior = 0;
+      for (const [ix, n] of porFaixa) if (n > maior) { maior = n; dominante = ix; }
+      if (dominante >= 0 && maior >= Math.max(2, validos.length * 0.5)) {
+        const afetados = divergentes.filter((d) => d.faixaOutra === dominante);
+        const perda = afetados.reduce((s, d) => s + (d.esperado - d.bruto) * (d.qtde || 0), 0);
+        motivos.unshift(
+          dominante === ixCarta
+            ? {
+                nivel: "carta",
+                texto:
+                  `Carta na Manga — faixa ${FAIXAS[dominante].rotulo}. ${moeda(neg.totalBruto)} ` +
+                  `dá a faixa ${faixa.rotulo}, e o pedido está precificado uma faixa acima ` +
+                  `(${maior} de ${validos.length} itens, ${moeda(perda)} de concessão)`,
+              }
+            : dominante < faixa.indice
+            ? {
+                nivel: "info",
+                texto:
+                  `Negociado na tabela de ${FAIXAS[dominante].rotulo}. ${moeda(neg.totalBruto)} daria ` +
+                  `direito à faixa ${faixa.rotulo}, mas o representante não é obrigado a descer de ` +
+                  `tabela — ${maior} de ${validos.length} itens, ${moeda(-perda)} a mais para a empresa`,
+              }
+            : {
+                nivel: "erro",
+                texto:
+                  `Pedido na faixa de valor errada: ${FAIXAS[dominante].rotulo}. ${moeda(neg.totalBruto)} ` +
+                  `corresponde à faixa ${faixa.rotulo} — ${maior} de ${validos.length} itens ` +
+                  `estão precificados na faixa ${FAIXAS[dominante].rotulo}` +
+                  (perda > 0 ? `, ${moeda(perda)} abaixo do devido` : ""),
+              }
+        );
+      }
+    }
+  }
+
+  if (temKit) {
+    // o kit tem regra comercial própria, já aprovada, que passa por cima de
+    // faixa, proteína e margem. Os apontamentos continuam visíveis, mas
+    // deixam de barrar o pedido.
+    for (const m of motivos) if (!m.kit && (m.nivel === "erro" || m.nivel === "alerta")) m.nivel = "aviso";
+    for (const d of divergentes) if (d.nivel !== "info") d.nivel = "info";
+    if (motivoMC && motivoMC.nivel !== "info") motivoMC.nivel = "aviso";
+    motivos.unshift({
+      nivel: "info",
+      kit: true,
+      texto:
+        "Pedido com kit: a condição do kit tem regra comercial própria e já está " +
+        "aprovada. Faixa, proteína e margem ficam registradas abaixo, mas não barram",
+    });
+  }
+  if (motivoMC) motivos.unshift(motivoMC);
+  if (motivoDebito) motivos.unshift(motivoDebito);
+
+  let veredito = "liberado";
+  // erro da própria regra do kit ainda barra; o resto o kit suplanta
+  const erroDeKit = motivos.some((m) => m.kit && m.nivel === "erro");
+  if (debito) veredito = "inadimplente";
+  else if (erroDeKit) veredito = "erro";
+  else if (temKit) veredito = "kit";
+  else if (motivos.some((m) => m.nivel === "erro") || divergentes.some((d) => d.nivel === "erro"))
+    veredito = "erro";
+  else if (motivos.some((m) => m.nivel === "carta") || divergentes.some((d) => d.nivel === "carta"))
+    veredito = "carta";
+  else if (tipo === "negociado") veredito = "negociado";
+  // "info" e "aviso" registram o fato sem rebaixar: o pedido passou na regra
+  else if (
+    motivos.some((m) => m.nivel !== "info" && m.nivel !== "aviso") ||
+    divergentes.some((d) => d.nivel !== "info")
+  )
+    veredito = "alerta";
+
+  return {
+    ...base, itens, validos, total, totalBruto, pagto, proteina,
+    mix: Number((totalBruto - proteina).toFixed(2)),
+    fatia, faixa, regime, debito, passivo, neg, margem,
+    habilitado, naTabela: neg.naTabela, adesao: neg.adesao, tipo,
+    motivos, divergentes, veredito,
+  };
+}
+
+/* ============================ estilo ============================ */
+const CSS = `
+.vp{--tinta:#16222E;--fraca:#63707D;--papel:#E9EDF1;--cartao:#FFF;--linha:#C9D3DC;--azul:#1F4A7A;
+--bloq:#A32017;--bloqf:#FBEDEB;--aten:#8A5A00;--atenf:#FDF4E3;--ok:#16624A;--okf:#EAF3EF;
+--mono:ui-monospace,"SFMono-Regular","Menlo","Consolas",monospace;--sans:"Inter","Segoe UI",system-ui,sans-serif;
+background:var(--papel);color:var(--tinta);font-family:var(--sans);font-size:14px;line-height:1.5;min-height:100%;padding:24px 16px 64px}
+.vp *{box-sizing:border-box}
+.vp-wrap{max-width:1080px;margin:0 auto}
+.vp-topo{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:20px}
+.vp-titulo{font-size:26px;font-weight:600;letter-spacing:-.02em;margin:0}
+.vp-sub{color:var(--fraca);margin:4px 0 0;font-size:13px}
+.vp-eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--fraca);margin:0}
+.vp-cartao{background:var(--cartao);border:1px solid var(--linha);border-radius:4px;padding:18px;margin-bottom:16px}
+.vp-cartao h2{font-size:14px;font-weight:600;margin:0 0 12px;display:flex;align-items:baseline;gap:8px}
+.vp-cartao h2 span{font-family:var(--mono);font-size:10px;color:var(--fraca);letter-spacing:.12em}
+.vp-input{padding:7px 9px;border:1px solid var(--linha);border-radius:3px;font-family:var(--mono);font-size:13px;background:#fff;color:var(--tinta)}
+.vp-btn{border:1px solid var(--tinta);background:var(--tinta);color:#fff;padding:8px 16px;border-radius:3px;font-size:13px;font-weight:500;cursor:pointer}
+.vp-btn:hover{background:#24374A}
+.vp-btn[disabled]{opacity:.4;cursor:not-allowed}
+.vp-btn-linha{background:transparent;color:var(--tinta);border-color:var(--linha)}
+.vp-btn-linha:hover{background:var(--papel)}
+.vp-input:focus,.vp-btn:focus-visible,.vp-chip:focus-visible{outline:2px solid var(--azul);outline-offset:1px}
+.vp-solta{border:1.5px dashed var(--linha);border-radius:4px;padding:28px 16px;text-align:center;background:#fff;cursor:pointer}
+.vp-solta:hover,.vp-solta.ativo{border-color:var(--azul);background:#F5F8FB}
+.vp-solta strong{display:block;font-size:14px;margin-bottom:4px}
+.vp-solta small{color:var(--fraca)}
+.vp-chips{display:flex;flex-wrap:wrap;gap:6px}
+.vp-chip{font-family:var(--mono);font-size:11px;padding:5px 9px;border-radius:3px;cursor:pointer;border:1px solid var(--linha);background:#fff;color:var(--fraca)}
+.vp-chip[aria-pressed="true"]{background:var(--tinta);border-color:var(--tinta);color:#fff}
+.vp-recibo{background:#fff;border:1px solid var(--linha);border-radius:4px;padding:18px 20px;margin-bottom:16px;font-family:var(--mono)}
+.vp-recibo-topo{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--fraca)}
+.vp-tally{display:flex;flex-wrap:wrap;gap:26px;margin:14px 0 4px}
+.vp-tally div{min-width:84px}
+.vp-tally b{display:block;font-size:30px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.vp-tally span{font-size:10px;letter-spacing:.12em;text-transform:uppercase}
+.vp-serrilha{border-top:1px dashed var(--linha);margin:12px 0}
+.vp-ped{background:#fff;border:1px solid var(--linha);border-radius:4px;margin-bottom:10px;overflow:hidden}
+.vp-ped.colado{margin-top:-7px;border-top-left-radius:0;border-top-right-radius:0}
+.vp-elo{font-family:var(--mono);color:var(--fraca);margin-right:2px}
+.vp-ped-data{font-family:var(--mono);font-size:11.5px;color:var(--fraca);white-space:nowrap}
+.vp-ped-doc{font-family:var(--mono);font-size:11px;color:var(--fraca);white-space:nowrap}
+.vp-mercos{color:var(--fraca);font-weight:400}
+.vp-selo.obs{color:var(--azul);border-color:var(--azul);background:#EDF3F9}
+.vp-obs{border-left:3px solid var(--azul);background:#F4F8FB;padding:8px 12px;margin-bottom:12px;border-radius:0 3px 3px 0;font-size:13px;white-space:pre-wrap}
+.vp-mc{border:1px solid var(--linha);border-radius:3px;padding:8px 12px;margin-bottom:12px;background:#fff}
+.vp-mc-linhas{display:flex;flex-wrap:wrap;gap:4px 20px;font-family:var(--mono);font-size:11.5px;color:var(--fraca)}
+.vp-mc-linhas b{color:var(--tinta)}
+.vp-mc-itens{margin-top:6px;padding-top:6px;border-top:1px dashed var(--linha);font-family:var(--mono);font-size:11px;color:var(--fraca)}
+.vp-obs span{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--azul);margin-bottom:3px}
+.vp-ped.erro{border-left:3px solid var(--bloq)}
+.vp-ped.inadimplente{border-left:3px solid #6B0F0A;background:#FFFBFA}
+.vp-ped.alerta{border-left:3px solid var(--aten)}
+.vp-ped.carta{border-left:3px solid var(--azul)}
+.vp-ped.kit{border-left:3px solid #5B3C88}
+.vp-ped.liberado{border-left:3px solid var(--ok)}
+.vp-ped.negociado{border-left:3px solid var(--aten)}
+.vp-ped.bonificacao{border-left:3px solid var(--linha)}
+.vp-ped-topo{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 14px;cursor:pointer}
+.vp-ped-id{font-family:var(--mono);font-weight:600;font-size:14px}
+.vp-ped-cli{flex:1;min-width:160px;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vp-metricas{display:flex;flex-wrap:wrap;gap:4px 18px;padding:0 14px 12px;font-family:var(--mono);font-size:11.5px;color:var(--fraca)}
+.vp-metricas b{color:var(--tinta);font-weight:600}
+.vp-corpo{border-top:1px solid #EDF1F4;padding:12px 14px;background:#FBFCFD}
+.vp-motivos{margin:0 0 10px;padding-left:16px;font-size:13px}
+.vp-motivos li{margin-bottom:4px}
+.vp-motivos li.erro{color:var(--bloq)}
+.vp-motivos li.alerta{color:var(--aten)}
+.vp-motivos li.carta{color:var(--azul);font-weight:500}
+.vp-motivos li.info{color:var(--fraca)}
+.vp-motivos li.aviso{color:var(--aten)}
+.vp-tab{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)}
+.vp-tab th{text-align:left;padding:6px 8px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fraca);border-bottom:1px solid var(--linha)}
+.vp-tab td{padding:6px 8px;border-bottom:1px solid #EDF1F4}
+.vp-tab td.num{text-align:right;font-variant-numeric:tabular-nums}
+.vp-tab tr:last-child td{border-bottom:0}
+.vp-selo{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border-radius:2px;border:1px solid;white-space:nowrap}
+.vp-selo.erro{color:var(--bloq);border-color:var(--bloq);background:var(--bloqf)}
+.vp-selo.inadimplente{color:#FFF;border-color:#6B0F0A;background:#6B0F0A}
+.vp-selo.aberto{color:var(--aten);border-color:var(--aten);background:var(--atenf)}
+.vp-selo.alerta{color:var(--aten);border-color:var(--aten);background:var(--atenf)}
+.vp-selo.carta{color:var(--azul);border-color:var(--azul);background:#EDF3F9}
+.vp-selo.kit{color:#FFF;border-color:#5B3C88;background:#5B3C88}
+.vp-selo.liberado{color:var(--ok);border-color:var(--ok);background:var(--okf)}
+.vp-selo.negociado{color:var(--aten);border-color:var(--aten);background:var(--atenf)}
+.vp-selo.bonificacao{color:var(--fraca);border-color:var(--linha);background:var(--papel)}
+.vp-barrinha{display:inline-block;width:70px;height:5px;border-radius:3px;background:var(--linha);overflow:hidden;vertical-align:middle;margin-left:4px}
+.vp-barrinha i{display:block;height:100%}
+.vp-hist{list-style:none;margin:0;padding:0;font-family:var(--mono);font-size:12px}
+.vp-hist li{display:flex;gap:12px;flex-wrap:wrap;padding:8px 0;border-bottom:1px dashed var(--linha)}
+.vp-hist li:last-child{border-bottom:0}
+.vp-hist .arq{flex:1;min-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vp-aviso{font-size:12px;color:var(--fraca);margin:8px 0 0}
+.vp-erro-caixa{background:var(--bloqf);border:1px solid var(--bloq);color:var(--bloq);padding:10px 12px;border-radius:3px;font-size:13px;margin-bottom:12px}
+.vp-vazio{padding:28px;text-align:center;color:var(--fraca);font-size:13px}
+@media(max-width:640px){.vp-titulo{font-size:21px}.vp-tally{gap:16px}.vp-tally b{font-size:23px}}
+`;
+
+/* ============================ armazenamento ============================ */
+const CHAVE_HIST = "conferencias:historico";
+const CHAVE_NOME = "conferencia:operador";
+
+async function lerGuardado(chave) {
+  try {
+    const v = localStorage.getItem(chave);
+    return v ? JSON.parse(v) : null;
+  } catch { return null; }
+}
+async function gravarGuardado(chave, valor) {
+  try { localStorage.setItem(chave, JSON.stringify(valor)); return true; }
+  catch { return false; }
+}
+
+/* ============================ leitura ============================ */
+async function lerPlanilha(arquivo) {
+  const nome = arquivo.name.toLowerCase();
+  if (nome.endsWith(".csv") || nome.endsWith(".txt")) {
+    const buf = await arquivo.arrayBuffer();
+    let texto = new TextDecoder("utf-8").decode(buf);
+    if (texto.includes("\uFFFD")) texto = new TextDecoder("windows-1252").decode(buf);
+    const r = Papa.parse(texto.replace(/^\uFEFF/, ""), { header: true, skipEmptyLines: "greedy" });
+    return { colunas: (r.meta.fields || []).filter((c) => c && c.trim()), linhas: r.data };
+  }
+  const buf = await arquivo.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const aba = wb.Sheets[wb.SheetNames[0]];
+  const linhas = XLSX.utils.sheet_to_json(aba, { defval: "", raw: false });
+  return { colunas: Object.keys(linhas[0] || {}).filter((c) => c && !c.startsWith("__EMPTY")), linhas };
+}
+
+const ESPERADAS = {
+  pedido: "PEDIDO", dataPedido: "DATAPEDIDO", cliente: "CLIENTE", codigo: "CODIGO",
+  produto: "PRODUTO", qtde: "QTDE", valUnit: "VALUNIT", valTotal: "VALTOTAL",
+  bonificado: "BONIFICADO", status: "STATUS", libComl: "LIBCOML", libFin: "LIBFIN",
+  condPgto: "CONDPGTO",
+};
+
+/* Colunas opcionais: cada uma aceita mais de uma grafia, porque o nome varia
+   entre exports ("Observação" e "Observações", "Representante" e "Vendedor") */
+const OPCIONAIS = {
+  cnpj: ["CNPJCLIENTE", "CNPJ"],
+  representante: ["REPRESENTANTE", "VENDEDOR"],
+  observacoes: ["OBSERVACAO", "OBSERVACOES", "OBSERVACAOPEDIDO", "OBSERVACOESPEDIDO", "OBS"],
+  uf: ["UF", "ESTADO", "UFCLIENTE"],
+  mercos: ["PEDIDOMERCOS", "MERCOS"],
+};
+
+function detectarColunas(colunas) {
+  const mapa = {};
+  const faltando = [];
+  const norm = colunas.map((c) => [normalizar(c).replace(/ /g, ""), c]);
+  const acha = (alvo) => norm.find(([n]) => n === alvo);
+  for (const [chave, alvo] of Object.entries(ESPERADAS)) {
+    const achado = acha(alvo);
+    if (achado) mapa[chave] = achado[1];
+    else faltando.push(alvo);
+  }
+  for (const [chave, alternativas] of Object.entries(OPCIONAIS)) {
+    for (const alvo of alternativas) {
+      const achado = acha(alvo);
+      if (achado) { mapa[chave] = achado[1]; break; }
+    }
+  }
+  return { mapa, faltando };
+}
+
+/* ---------- base de títulos: aba Abertos ---------- */
+function formatarDoc(v) {
+  const d = String(v ?? "").replace(/\D/g, "");
+  if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+  if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+  return d;
+}
+
+const normCnpj = (v) => {
+  const d = String(v ?? "").replace(/\D/g, "");
+  return d ? d.padStart(14, "0") : "";
+};
+
+/* ---------- data de "ontem", no fuso de São Paulo ---------- */
+function ontemSP() {
+  const agora = new Date();
+  const saoPaulo = new Date(agora.toLocaleString("en-US", { timeZone: "America/Sao_Paulo" }));
+  saoPaulo.setHours(0, 0, 0, 0);
+  saoPaulo.setDate(saoPaulo.getDate() - 1);
+  return saoPaulo;
+}
+
+function lerData(txt) {
+  const t = String(txt ?? "").trim();
+  if (!t) return null;
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/); // 2026-09-22 00:00:00
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  m = t.match(/^(\d{2})\/(\d{2})\/(\d{4})/); // 22/09/2026
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+  return null;
+}
+
+/* ---------- base de títulos ----------
+   Aceita dois formatos:
+   (a) planilha .xlsx com aba "Abertos" e coluna "Dias Atraso";
+   (b) extrato "Detalhamento" (CSV ou xlsx) com uma linha por título em aberto,
+       coluna de vencimento e de valor liquidado. Nesse caso, inadimplente é o
+       cliente com título NÃO liquidado e vencimento (a data repactuada, quando
+       houver) até ontem. */
+async function lerTitulos(arquivo) {
+  const nome = arquivo.name.toLowerCase();
+  let linhas, colunas;
+
+  if (nome.endsWith(".csv") || nome.endsWith(".txt")) {
+    const buf = await arquivo.arrayBuffer();
+    let texto = new TextDecoder("utf-8").decode(buf);
+    if (texto.includes("\uFFFD")) texto = new TextDecoder("windows-1252").decode(buf);
+    const r = Papa.parse(texto.replace(/^\uFEFF/, ""), { header: true, skipEmptyLines: "greedy" });
+    linhas = r.data;
+    colunas = (r.meta.fields || []).filter((c) => c && c.trim());
+  } else {
+    const buf = await arquivo.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    // prefere a aba "Abertos"; senão, a primeira
+    const aba = wb.SheetNames.find((n) => normalizar(n) === "ABERTOS") || wb.SheetNames[0];
+    linhas = XLSX.utils.sheet_to_json(wb.Sheets[aba], { defval: "" });
+    colunas = Object.keys(linhas[0] || {});
+  }
+
+  const norm = (c) => normalizar(c).replace(/ /g, "");
+  const acha = (...alvos) => colunas.find((c) => alvos.includes(norm(c)));
+  const cCnpj = acha("CNPJ", "CNPJCLIENTE");
+  if (!cCnpj) throw new Error("A base de títulos precisa de uma coluna de CNPJ.");
+
+  const cGrupo = acha("GRUPOCNPJ", "GRUPO");
+  const cCli = acha("NAME", "NOME", "CLIENTE", "RAZAOSOCIAL");
+  const cSit = acha("SITUACAO", "TAGS");
+  const cAtraso = acha("DIASATRASO");
+  const cVenc = acha("NOVADTVENC", "VENCTO", "VENCIMENTO", "DATAVENCIMENTO");
+  const cValor = acha("TOTALRGERAL", "VALOR", "VALORTITULO", "TOTALR");
+  const cLiquidado = acha("TOTALRLIQUIDADO", "LIQUIDADO", "RECBTO");
+
+  const limite = ontemSP();
+  const mapa = new Map();
+  const raizes = new Map();
+  // passivo total: TODOS os títulos em aberto do cliente, vencidos ou não
+  const aberto = new Map();
+  const abertoRaiz = new Map();
+  let vencidos = 0;
+  let emAberto = 0;
+
+  for (const l of linhas) {
+    const cnpj = normCnpj(l[cCnpj]);
+    if (!cnpj || /^0+$/.test(cnpj)) continue;
+
+    // se a base informa liquidação, o título quitado não entra em nada
+    if (cLiquidado) {
+      const liq = paraNumero(l[cLiquidado]);
+      const recebido = lerData(l[cLiquidado]);
+      if ((liq != null && liq > 0) || recebido) continue;
+    }
+
+    const valor = paraNumero(String(l[cValor] ?? "").replace(",", ".")) ?? 0;
+    const grupo = cGrupo ? String(l[cGrupo] ?? "").trim() : "";
+
+    // 1) passivo total — todo título em aberto conta
+    emAberto += 1;
+    const somarAberto = (chave, alvo) => {
+      if (!alvo.has(chave)) alvo.set(chave, { titulos: 0, valor: 0 });
+      const a = alvo.get(chave);
+      a.titulos += 1;
+      a.valor += valor;
+    };
+    somarAberto(cnpj, aberto);
+    somarAberto(cnpj.slice(0, 8), abertoRaiz);
+
+    // 2) inadimplência — só o título já vencido
+    let atraso = null;
+    if (cAtraso) {
+      atraso = paraNumero(l[cAtraso]);
+      if (atraso == null || atraso < 1) continue;
+    } else if (cVenc) {
+      const v = lerData(l[cVenc]);
+      if (!v || v > limite) continue;
+      atraso = Math.round((limite - v) / 86400000) + 1;
+    } else {
+      continue;
+    }
+    vencidos += 1;
+
+    const registrar = (chave, alvo) => {
+      if (!alvo.has(chave))
+        alvo.set(chave, {
+          cnpj: chave, cliente: String(l[cCli] ?? "").trim(), grupo,
+          titulos: 0, valor: 0, maxAtraso: 0, situacoes: new Set(), empresas: new Set(),
+        });
+      const r = alvo.get(chave);
+      r.titulos += 1;
+      r.valor += valor;
+      r.maxAtraso = Math.max(r.maxAtraso, atraso);
+      r.empresas.add(cnpj);
+      const s = cSit ? String(l[cSit] ?? "").trim() : "";
+      if (s && s !== "'-" && s !== "-") r.situacoes.add(s);
+    };
+    registrar(cnpj, mapa);
+    registrar(cnpj.slice(0, 8), raizes);
+    if (grupo) registrar("g:" + normalizar(grupo), raizes);
+  }
+  return {
+    mapa, raizes, aberto, abertoRaiz,
+    linhas: linhas.length, vencidos, emAberto, clientes: mapa.size,
+    clientesAberto: aberto.size,
+  };
+}
+
+function baixarCSV(nome, linhas) {
+  const csv = Papa.unparse(linhas, { delimiter: ";" });
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nome; a.click();
+  URL.revokeObjectURL(url);
+}
+
+const agora = () =>
+  new Date().toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+/* ============================ componente ============================ */
+function ValidadorPedidos() {
+  const [operador, setOperador] = useState("");
+  const [nomeSalvo, setNomeSalvo] = useState(false);
+  const [arquivo, setArquivo] = useState(null);
+  const [bruto, setBruto] = useState(null);
+  const [titulos, setTitulos] = useState(null);
+  const [arquivoTit, setArquivoTit] = useState(null);
+  const [carregandoTit, setCarregandoTit] = useState(false);
+  const [falha, setFalha] = useState("");
+  const [carregando, setCarregando] = useState(false);
+  const [arrastando, setArrastando] = useState(false);
+  const [fila, setFila] = useState("comercial");
+  const [abertos, setAbertos] = useState(new Set());
+  const [historico, setHistorico] = useState([]);
+  const [verHistorico, setVerHistorico] = useState(false);
+  const inputRef = useRef(null);
+  const inputTitRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const n = await lerGuardado(CHAVE_NOME);
+      if (n) { setOperador(n); setNomeSalvo(true); }
+      const h = await lerGuardado(CHAVE_HIST);
+      setHistorico(Array.isArray(h) ? h : []);
+    })();
+  }, []);
+
+  async function salvarNome() {
+    const l = operador.trim();
+    if (!l) return;
+    await gravarGuardado(CHAVE_NOME, l);
+    setOperador(l); setNomeSalvo(true);
+  }
+
+  async function receberArquivo(f) {
+    if (!f) return;
+    setFalha(""); setCarregando(true); setBruto(null); setAbertos(new Set());
+    try {
+      const { colunas, linhas } = await lerPlanilha(f);
+      const { mapa, faltando } = detectarColunas(colunas);
+      if (faltando.length) {
+        throw new Error(
+          `A planilha não tem as colunas: ${faltando.join(", ")}. ` +
+          `Esperado o layout do Dashboard (Pedido, Cliente, Código, Produto, Qtde, Val.Unit., Val.Total, Bonificado, Lib.Coml, Lib.Fin.).`
+        );
+      }
+      // um pedido por vez, depois agrupados em negociações
+      const porPedido = new Map();
+      const ordem = [];
+      for (const l of linhas) {
+        const id = String(l[mapa.pedido] ?? "").trim();
+        if (!id) continue;
+        if (!porPedido.has(id)) { porPedido.set(id, []); ordem.push(id); }
+        porPedido.get(id).push(l);
+      }
+      // mesmo cliente + mesma data = uma negociação; bonificação fica sempre à parte
+      const porNegociacao = new Map();
+      for (const id of ordem) {
+        const ls = porPedido.get(id);
+        const bonif = pedidoEhBonificacao(ls, mapa);
+        const quem = mapa.cnpj
+          ? normCnpj(ls[0][mapa.cnpj]) || String(ls[0][mapa.cliente] ?? "").trim()
+          : String(ls[0][mapa.cliente] ?? "").trim();
+        const quando = mesDe(ls[0][mapa.dataPedido]);
+        // bonificação e pedido reprovado ou cancelado ficam fora da soma
+        const chave = bonif
+          ? `bonificacao|${id}`
+          : pedidoEntraNaSoma(ls, mapa)
+          ? `${quem}|${quando}`
+          : `foradasoma|${id}`;
+        if (!porNegociacao.has(chave))
+          porNegociacao.set(chave, { ids: [], linhas: [], porPedido: new Map(), bonificacao: bonif });
+        const n = porNegociacao.get(chave);
+        n.ids.push(id);
+        n.linhas.push(...ls);
+        n.porPedido.set(id, ls);
+      }
+      setArquivo(f);
+      setBruto({ porNegociacao, mapa, totalLinhas: linhas.length, temCnpj: !!mapa.cnpj });
+    } catch (e) {
+      setFalha(e.message || "Não deu para ler esse arquivo.");
+      setArquivo(null);
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  async function receberTitulos(f) {
+    if (!f) return;
+    setFalha(""); setCarregandoTit(true);
+    try {
+      const r = await lerTitulos(f);
+      setArquivoTit(f);
+      setTitulos(r);
+    } catch (e) {
+      setFalha(e.message || "Não deu para ler a base de títulos.");
+      setArquivoTit(null); setTitulos(null);
+    } finally {
+      setCarregandoTit(false);
+    }
+  }
+
+  const dados = useMemo(() => {
+    if (!bruto) return null;
+    const mapaTit = titulos || null;
+    const pedidos = [];
+    for (const n of bruto.porNegociacao.values()) {
+      const resumo = resumirNegociacao(n.ids, n.linhas, bruto.mapa);
+      for (const id of n.ids) {
+        pedidos.push(analisarPedido(id, n.porPedido.get(id), bruto.mapa, mapaTit, resumo));
+      }
+    }
+    return { pedidos, totalLinhas: bruto.totalLinhas };
+  }, [bruto, titulos]);
+
+  const visiveis = useMemo(() => {
+    if (!dados) return [];
+    // um pedido já faturado, separado ou cancelado passou da análise comercial,
+    // mesmo que a coluna de liberação tenha vindo vazia no export
+    const JA_SEGUIU = ["FATURADO", "EM SEPARACAO", "CANCELADO"];
+    const seguiu = (p) => JA_SEGUIU.some((x) => normalizar(p.status).includes(x));
+    const f = (p) => {
+      if (fila === "comercial") return p.libComl === "" && !seguiu(p);
+      if (fila === "financeiro")
+        return p.libComl.toLowerCase() === "true" && p.libFin === "" && !seguiu(p);
+      return true;
+    };
+    const lista = dados.pedidos.filter(f);
+
+    // bonificação que caiu um dia antes ou depois entra no grupo do pedido
+    const chaveOrdem = (p) => paraData(p.data) ?? 99999999;
+    const naoBonif = lista.filter((p) => p.tipo !== "bonificacao");
+    for (const b of lista.filter((p) => p.tipo === "bonificacao")) {
+      const d = chaveOrdem(b);
+      const perto = naoBonif.find(
+        (p) => p.cnpj && p.cnpj === b.cnpj && Math.abs(chaveOrdem(p) - d) <= 1
+      );
+      if (perto) b.grupo = perto.grupo;
+    }
+
+    // pedidos do mesmo cliente ficam em sequência; os grupos vão do mais
+    // antigo no topo para o mais recente embaixo
+    const grupos = new Map();
+    for (const p of lista) {
+      if (!grupos.has(p.grupo)) grupos.set(p.grupo, []);
+      grupos.get(p.grupo).push(p);
+    }
+    return [...grupos.values()]
+      .map((g) => {
+        g.sort((a, b) => chaveOrdem(a) - chaveOrdem(b) || a.id.localeCompare(b.id));
+        return { g, quando: Math.min(...g.map(chaveOrdem)) };
+      })
+      .sort((a, b) => a.quando - b.quando || a.g[0].id.localeCompare(b.g[0].id))
+      .flatMap(({ g }) => g);
+  }, [dados, fila]);
+
+  const contagem = useMemo(() => {
+    const c = { inadimplente: 0, erro: 0, carta: 0, alerta: 0, negociado: 0, kit: 0, liberado: 0, bonificacao: 0 };
+    visiveis.forEach((p) => { c[p.veredito] += 1; });
+    // o verde conta tudo que pode seguir, inclusive com ressalva — por isso a
+    // soma dos contadores passa do total de pedidos, de propósito
+    c.liberado = visiveis.filter((p) => ["liberado", "alerta", "carta", "kit"].includes(p.veredito)).length;
+    return c;
+  }, [visiveis]);
+
+  useEffect(() => {
+    if (!dados || !arquivo || !visiveis.length) return;
+    (async () => {
+      const reg = {
+        quando: agora(), quem: operador || "sem nome", arquivo: arquivo.name,
+        fila, pedidos: visiveis.length, bloqueados: contagem.erro + contagem.inadimplente, atencao: contagem.alerta,
+      };
+      const atual = (await lerGuardado(CHAVE_HIST)) || [];
+      const novo = [reg, ...(Array.isArray(atual) ? atual : [])].slice(0, 40);
+      if (await gravarGuardado(CHAVE_HIST, novo)) setHistorico(novo);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dados, fila]);
+
+  function alternar(id) {
+    setAbertos((a) => {
+      const n = new Set(a);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }
+
+  function exportar() {
+    const saida = [];
+    for (const p of visiveis) {
+      if (p.veredito === "liberado") continue;
+      const cab = {
+        Pedido: p.id, Mercos: p.mercos || "", Pedidos: (p.pedidos || []).length, Cliente: p.cliente, Documento: p.doc || "", ValoresEmAberto: p.passivo ? p.passivo.valor.toFixed(2).replace(".", ",") : "", Representante: p.representante || "", Observacoes: p.observacoes || "", UF: p.uf || "", MC: p.margem ? (p.margem.pct*100).toFixed(1).replace(".",",")+"%" : "", Data: p.data, CondPgto: p.condPgto,
+        TotalPA: (p.totalBruto ?? 0).toFixed(2).replace(".", ","),
+        Pagamento: p.pagto ? p.pagto.nome : "",
+        Proteina: p.fatia != null ? (p.fatia * 100).toFixed(1) + "%" : "",
+        Faixa: p.faixa ? p.faixa.rotulo : "—",
+        Veredito: { inadimplente: "INADIMPLENTE", erro: "BLOQUEADO", carta: "CARTA NA MANGA", negociado: "PRECO NEGOCIADO", kit: "KIT" }[p.veredito] || "ATENCAO",
+      };
+      for (const m of p.motivos) saida.push({ ...cab, Tipo: "pedido", Item: "", Motivo: m.texto });
+      for (const d of p.divergentes)
+        saida.push({
+          ...cab, Tipo: "item", Item: `${d.codigo} ${d.nomeErp}`,
+          Motivo: `${d.produto.nome}: veio ${moeda(d.unit)} (${moeda(d.bruto)} sem o desconto), esperado ${moeda(d.esperado)} (${d.pista})`,
+        });
+    }
+    if (!saida.length) return;
+    baixarCSV(`conferencia-${arquivo.name.replace(/\.[^.]+$/, "")}.csv`, saida);
+  }
+
+  const rotuloVeredito = {
+    inadimplente: "Inadimplente", erro: "Bloqueado", alerta: "Atenção", carta: "Carta na Manga", kit: "Kit", liberado: "Liberado",
+    negociado: "Preço negociado", bonificacao: "Bonificação",
+  };
+
+  return (
+    <div className="vp">
+      <style>{CSS}</style>
+      <div className="vp-wrap">
+        <header className="vp-topo">
+          <div>
+            <p className="vp-eyebrow">Under's Brothers · tabela de agosto</p>
+            <h1 className="vp-titulo">Conferência comercial</h1>
+            <p className="vp-sub">
+              Habilitação pelos 50% de proteína, faixa pelo total em produto e preço item a item.
+            </p>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <p className="vp-eyebrow">Conferente</p>
+            {nomeSalvo ? (
+              <p style={{ margin: "2px 0 0", fontFamily: "var(--mono)", fontSize: 13 }}>
+                {operador}{" "}
+                <button className="vp-chip" style={{ marginLeft: 6 }} onClick={() => setNomeSalvo(false)}>trocar</button>
+              </p>
+            ) : (
+              <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                <input className="vp-input" style={{ width: 140 }} placeholder="seu nome" value={operador}
+                  onChange={(e) => setOperador(e.target.value)} onKeyDown={(e) => e.key === "Enter" && salvarNome()} />
+                <button className="vp-btn" onClick={salvarNome}>Salvar</button>
+              </div>
+            )}
+          </div>
+        </header>
+
+        {falha && <div className="vp-erro-caixa">{falha}</div>}
+
+        <section className="vp-cartao">
+          <h2>Planilha de pedidos <span>dashboard · csv · xlsx</span></h2>
+          <div className={`vp-solta${arrastando ? " ativo" : ""}`}
+            onClick={() => inputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setArrastando(true); }}
+            onDragLeave={() => setArrastando(false)}
+            onDrop={(e) => { e.preventDefault(); setArrastando(false); receberArquivo(e.dataTransfer.files?.[0]); }}
+            role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}>
+            {carregando ? <strong>Lendo a planilha…</strong>
+              : arquivo ? (<>
+                  <strong style={{ fontFamily: "var(--mono)" }}>{arquivo.name}</strong>
+                  <small>{dados?.totalLinhas} linhas · {dados?.pedidos.length} pedidos · clique para trocar</small>
+                </>)
+              : (<><strong>Arraste o Dashboard aqui</strong><small>ou clique para escolher no computador</small></>)}
+          </div>
+        </section>
+        <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv,.txt" style={{ display: "none" }}
+          onChange={(e) => receberArquivo(e.target.files?.[0])} />
+
+        <section className="vp-cartao">
+          <h2>Base de títulos <span>detalhamento · abertos · csv · xlsx</span></h2>
+          <div className="vp-solta" onClick={() => inputTitRef.current?.click()}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); receberTitulos(e.dataTransfer.files?.[0]); }}
+            role="button" tabIndex={0} onKeyDown={(e) => e.key === "Enter" && inputTitRef.current?.click()}>
+            {carregandoTit ? <strong>Lendo a base…</strong>
+              : titulos ? (<>
+                  <strong style={{ fontFamily: "var(--mono)" }}>{arquivoTit?.name}</strong>
+                  <small>
+                    {titulos.vencidos} títulos vencidos · {titulos.clientes} clientes inadimplentes
+                    {" "}· clique para trocar
+                  </small>
+                </>)
+              : (<><strong>Arraste a Base de Títulos aqui</strong>
+                  <small>opcional — sem ela o validador não checa inadimplência</small></>)}
+          </div>
+          {bruto && !bruto.temCnpj && (
+            <p className="vp-aviso" style={{ color: "var(--bloq)" }}>
+              A planilha de pedidos não trouxe a coluna Cnpj Cliente, então não dá para cruzar com os títulos.
+            </p>
+          )}
+        </section>
+        <input ref={inputTitRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }}
+          onChange={(e) => receberTitulos(e.target.files?.[0])} />
+
+        {dados && (
+          <>
+            <section className="vp-recibo">
+              <div className="vp-recibo-topo">
+                <span>{arquivo?.name}</span>
+                <span>{operador || "sem nome"} · {agora()}</span>
+              </div>
+              <div className="vp-chips" style={{ marginTop: 10 }}>
+                {[["comercial", "Em análise comercial"], ["financeiro", "Aguardando financeiro"], ["todos", "Todos os pedidos"]]
+                  .map(([v, r]) => (
+                    <button key={v} className="vp-chip" aria-pressed={fila === v} onClick={() => setFila(v)}>{r}</button>
+                  ))}
+              </div>
+              <div className="vp-tally">
+                <div><b style={{ color: "#6B0F0A" }}>{contagem.inadimplente}</b><span style={{ color: "#6B0F0A" }}>Inadimplentes</span></div>
+                <div><b style={{ color: "var(--bloq)" }}>{contagem.erro}</b><span style={{ color: "var(--bloq)" }}>Bloqueados</span></div>
+                <div><b style={{ color: "var(--aten)" }}>{contagem.alerta}</b><span style={{ color: "var(--aten)" }}>Atenção</span></div>
+                <div><b style={{ color: "var(--azul)" }}>{contagem.carta}</b><span style={{ color: "var(--azul)" }}>Carta na manga</span></div>
+                <div><b style={{ color: "#5B3C88" }}>{contagem.kit}</b><span style={{ color: "#5B3C88" }}>Kit</span></div>
+                <div><b style={{ color: "var(--ok)" }}>{contagem.liberado}</b><span style={{ color: "var(--ok)" }}>Liberados</span></div>
+                <div><b style={{ color: "var(--aten)" }}>{contagem.negociado}</b><span style={{ color: "var(--aten)" }}>Negociado</span></div>
+                <div><b style={{ color: "var(--fraca)" }}>{contagem.bonificacao}</b><span style={{ color: "var(--fraca)" }}>Bonific.</span></div>
+              </div>
+              <p className="vp-aviso" style={{ marginTop: 4 }}>
+                Liberados inclui os que passaram com ressalva, então os números se
+                sobrepõem e somam mais que o total de pedidos.
+              </p>
+              <div className="vp-serrilha" />
+              <button className="vp-btn vp-btn-linha" onClick={exportar}
+                disabled={contagem.erro + contagem.alerta + contagem.carta + contagem.inadimplente === 0}>
+                Baixar pendências em CSV
+              </button>
+            </section>
+
+            {visiveis.length === 0 ? (
+              <p className="vp-vazio">Nenhum pedido nesta fila.</p>
+            ) : (
+              visiveis.map((p, ix) => {
+                const aberto = abertos.has(p.id);
+                const colado = ix > 0 && visiveis[ix - 1].grupo === p.grupo;
+                return (
+                  <article key={p.id} className={`vp-ped ${p.veredito}${colado ? " colado" : ""}`}>
+                    <div className="vp-ped-topo" onClick={() => alternar(p.id)} role="button" tabIndex={0}
+                      onKeyDown={(e) => e.key === "Enter" && alternar(p.id)}>
+                      <span className="vp-ped-id">
+                        {colado ? <span className="vp-elo">↳</span> : null}
+                        {p.id}
+                        {p.mercos ? <span className="vp-mercos">/{p.mercos}</span> : null}
+                      </span>
+                      <span className="vp-ped-data">{p.data || "sem data"}</span>
+                      <span className="vp-ped-cli">{p.cliente}</span>
+                      {p.doc ? <span className="vp-ped-doc">{p.doc}</span> : null}
+                      {p.passivo && p.passivo.valor > 0 ? (
+                        <span
+                          className="vp-selo aberto"
+                          title={`${p.passivo.titulos} título(s) em aberto`}
+                        >
+                          em aberto {moeda(p.passivo.valor)}
+                        </span>
+                      ) : null}
+                      {p.observacoes ? <span className="vp-selo obs">obs.</span> : null}
+                      {p.pedidos && p.pedidos.length > 1 && (
+                        <span className="vp-selo alerta">
+                          com {p.pedidos.filter((x) => x !== p.id).join(", ")}
+                        </span>
+                      )}
+                      {(() => {
+                        // pedido que não foi barrado carrega o selo verde; a
+                        // ressalva aparece ao lado, sem esconder a aprovação
+                        const barrado = ["erro", "inadimplente", "negociado", "bonificacao"];
+                        if (barrado.includes(p.veredito))
+                          return <span className={`vp-selo ${p.veredito}`}>{rotuloVeredito[p.veredito]}</span>;
+                        return (
+                          <>
+                            <span className="vp-selo liberado">Liberado</span>
+                            {p.veredito !== "liberado" && (
+                              <span className={`vp-selo ${p.veredito}`}>{rotuloVeredito[p.veredito]}</span>
+                            )}
+                          </>
+                        );
+                      })()}
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--fraca)" }}>
+                        {aberto ? "▾" : "▸"}
+                      </span>
+                    </div>
+                    <div className="vp-metricas">
+                      {p.tipo === "bonificacao" ? (
+                        <span>bonificação <b>{moeda(p.totalBonificado)}</b></span>
+                      ) : (
+                        <>
+                          <span>
+                            este pedido <b>{moeda(p.total)}</b>
+                            {p.total !== p.totalBruto ? ` (tabela ${moeda(p.totalBruto)})` : ""}
+                            {p.pedidos.length > 1
+                              ? ` · soma dos ${p.pedidos.length} pedidos ${moeda(p.neg.total)}`
+                              : ""}
+                          </span>
+                          <span>
+                            proteína <b>{(p.fatia * 100).toFixed(1)}%</b>
+                            <span className="vp-barrinha">
+                              <i style={{
+                                width: `${Math.min(p.fatia * 100, 100)}%`,
+                                background: !p.habilitado
+                                  ? "var(--bloq)"
+                                  : p.fatia > p.regime.limite
+                                  ? "var(--aten)"
+                                  : "var(--ok)",
+                              }} />
+                            </span>
+                            <span style={{ marginLeft: 5 }}>
+                              /{(p.neg.teto * 100).toFixed(0)}%
+                            </span>
+                          </span>
+                          <span>faixa <b>{p.faixa ? p.faixa.rotulo + (p.faixa.tolerada ? " ~" : "") : "—"}</b></span>
+                          {p.margem && p.margem.faturamento > 0 && (
+                            <span>
+                              MC{" "}
+                              <b
+                                style={{
+                                  color:
+                                    p.margem.pct >= MC_META
+                                      ? "var(--ok)"
+                                      : p.margem.pct >= MC_DIRETORIA
+                                      ? "var(--aten)"
+                                      : "var(--bloq)",
+                                }}
+                              >
+                                {(p.margem.pct * 100).toFixed(1)}%
+                              </b>
+                              <span className="vp-barrinha" title="meta 30%">
+                                <i
+                                  style={{
+                                    width: `${Math.max(0, Math.min(p.margem.pct / 0.5, 1)) * 100}%`,
+                                    background:
+                                      p.margem.pct >= MC_META
+                                        ? "var(--ok)"
+                                        : p.margem.pct >= MC_DIRETORIA
+                                        ? "var(--aten)"
+                                        : "var(--bloq)",
+                                  }}
+                                />
+                              </span>
+                            </span>
+                          )}
+                          <span>{p.tipo === "campanha" ? "preço de campanha" : p.tipo === "misto" ? `${p.naTabela}/${p.neg.itens} na campanha` : "preço negociado"}</span>
+                        </>
+                      )}
+                      <span>{p.pagto ? p.pagto.nome : "—"} · {p.condPgto || "—"}</span>
+                      {p.representante ? <span>rep. <b>{p.representante}</b></span> : null}
+                    </div>
+
+                    {aberto && (
+                      <div className="vp-corpo">
+                        {p.passivo && p.passivo.valor > 0 && (
+                          <div className="vp-obs" style={{ borderLeftColor: "var(--aten)", background: "var(--atenf)" }}>
+                            <span style={{ color: "var(--aten)" }}>valores em aberto</span>
+                            {`${p.cliente} tem ${moeda(p.passivo.valor)} em ${p.passivo.titulos} `}
+                            {p.passivo.titulos === 1 ? "título em aberto" : "títulos em aberto"}
+                            {p.debito
+                              ? `, dos quais ${moeda(p.debito.valor)} já vencidos`
+                              : " (nenhum vencido)"}
+                          </div>
+                        )}
+                        {p.observacoes && (
+                          <div className="vp-obs">
+                            <span>observação do representante</span>
+                            {p.observacoes}
+                          </div>
+                        )}
+                        {p.margem && p.margem.faturamento > 0 && (
+                          <div className="vp-mc">
+                            <div className="vp-mc-linhas">
+                              <span>faturado <b>{moeda(p.margem.faturamento)}</b></span>
+                              <span>líquido s/ ICMS <b>{moeda(p.margem.liquida)}</b></span>
+                              <span>custo <b>{moeda(p.margem.custo)}</b></span>
+                              <span>
+                                deduções <b>{moeda(p.margem.deducoes)}</b>
+                                {" "}({((p.margem.deducoes / p.margem.faturamento) * 100).toFixed(1)}%)
+                              </span>
+                              <span>
+                                ICMS <b>{(p.margem.aliquota * 100).toFixed(0)}%</b> · CD {p.margem.cd}
+                                {" "}· {p.margem.condicoes.join(" / ")}
+                                {" "}· custo financeiro{" "}
+                                <b>{(p.margem.pctFinanceiro * 100).toFixed(1)}%</b>
+                              </span>
+                              <span>
+                                MC{" "}
+                                <b style={{ color: p.margem.pct >= MC_META ? "var(--ok)" : p.margem.pct >= MC_DIRETORIA ? "var(--aten)" : "var(--bloq)" }}>
+                                  {moeda(p.margem.mc)} · {(p.margem.pct * 100).toFixed(1)}%
+                                </b>
+                              </span>
+                            </div>
+                            {(() => {
+                              const vistos = new Set();
+                              const distintos = p.margem.porItem.filter((d) => {
+                                if (vistos.has(d.produto.nome)) return false;
+                                vistos.add(d.produto.nome);
+                                return true;
+                              });
+                              if (distintos.length < 2) return null;
+                              return (
+                                <div className="vp-mc-itens">
+                                  menor margem:{" "}
+                                  {distintos.slice(0, 3).map((d, i) => (
+                                    <span key={i}>
+                                      {d.produto.nome} <b>{(d.mcPctItem * 100).toFixed(0)}%</b>
+                                      {i < Math.min(2, distintos.length - 1) ? " · " : ""}
+                                    </span>
+                                  ))}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        )}
+                        {p.validos && p.validos.length > 0 && (
+                          <table className="vp-tab" style={{ marginBottom: 12 }}>
+                            <thead>
+                              <tr>
+                                <th>SKU</th><th>Produto</th>
+                                <th style={{ textAlign: "right" }}>Qtd.</th>
+                                <th style={{ textAlign: "right" }}>Unit.</th>
+                                <th style={{ textAlign: "right" }}>s/ desc.</th>
+                                <th style={{ textAlign: "right" }}>Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {p.validos.map((i, ix) => (
+                                <tr key={ix}>
+                                  <td>{i.codigo}</td>
+                                  <td>{i.produto ? i.produto.nome : i.nomeErp}</td>
+                                  <td className="num">{i.qtde}</td>
+                                  <td className="num">{moeda(i.unit)}</td>
+                                  <td className="num">
+                                    {i.bruto !== i.unit ? moeda(i.bruto) : "—"}
+                                  </td>
+                                  <td className="num">{moeda(i.total)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+
+                        {p.motivos.length > 0 && (
+                          <ul className="vp-motivos">
+                            {p.motivos.map((m, i) => (<li key={i} className={m.nivel}>{m.texto}</li>))}
+                          </ul>
+                        )}
+                        {p.divergentes.length > 0 && (
+                          <table className="vp-tab">
+                            <thead>
+                              <tr>
+                                <th>SKU</th><th>Produto</th>
+                                <th style={{ textAlign: "right" }}>Veio → s/ desc.</th>
+                                <th style={{ textAlign: "right" }}>Esperado</th>
+                                <th style={{ textAlign: "right" }}>Dif.</th>
+                                <th>Observação</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {p.divergentes.map((d, i) => (
+                                <tr key={i}>
+                                  <td>{d.codigo}</td>
+                                  <td>{d.produto.nome}</td>
+                                  <td className="num">{moeda(d.unit)}{d.bruto !== d.unit ? <span style={{ color: "var(--fraca)" }}> → {moeda(d.bruto)}</span> : null}</td>
+                                  <td className="num">{d.dif == null ? "—" : moeda(d.esperado)}</td>
+                                  <td className="num" style={{ color: d.nivel === "erro" ? "var(--bloq)" : d.nivel === "carta" ? "var(--azul)" : "var(--aten)" }}>
+                                    {d.dif == null ? "—" : `${d.dif > 0 ? "+" : ""}${d.dif.toFixed(2).replace(".", ",")}`}
+                                  </td>
+                                  <td>{d.pista}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )}
+                        {p.motivos.length === 0 && p.divergentes.length === 0 && (
+                          <p style={{ margin: 0, fontSize: 13, color: "var(--fraca)" }}>
+                            Nada a apontar: habilitado, dentro da faixa e com todos os preços corretos.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </article>
+                );
+              })
+            )}
+          </>
+        )}
+
+        {/* O histórico continua sendo gravado a cada conferência, mas fica
+            fora da tela — abre só quando alguém pede */}
+        <p style={{ marginTop: 18, textAlign: "center" }}>
+          <button className="vp-chip" onClick={() => setVerHistorico((v) => !v)}>
+            {verHistorico ? "ocultar conferências recentes" : "ver conferências recentes"}
+          </button>
+        </p>
+
+        {verHistorico && (
+          <section className="vp-cartao">
+            <h2>Conferências recentes <span>compartilhado</span></h2>
+            {historico.length === 0 ? (
+              <p className="vp-aviso">Nenhuma conferência registrada ainda.</p>
+            ) : (
+              <ul className="vp-hist">
+                {historico.map((h, i) => (
+                  <li key={i}>
+                    <span style={{ color: "var(--fraca)" }}>{h.quando}</span>
+                    <span className="arq">{h.arquivo}</span>
+                    <span>{h.quem}</span>
+                    <span style={{ color: "var(--bloq)" }}>{h.bloqueados} bloq.</span>
+                    <span style={{ color: "var(--aten)" }}>{h.atencao} aten.</span>
+                    <span style={{ color: "var(--fraca)" }}>de {h.pedidos}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="vp-aviso">
+              Visível para todos que abrirem este artefato. A planilha não é enviada a lugar
+              nenhum — só nome do arquivo, data e totais.
+            </p>
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("raiz")).render(<ValidadorPedidos />);
+</script></body></html>
