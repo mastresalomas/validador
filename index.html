@@ -902,11 +902,15 @@ function analisarPedido(id, linhas, cols, titulos, neg, historico) {
   // a bonificação entra aqui mesmo ficando fora da soma da negociação
   base.grupo = `${base.cnpj || base.cliente}|${mesDe(base.data)}`;
 
-  // histórico do cliente pela quantidade de notas fiscais distintas no arquivo.
-  // Agrupado por raiz de CNPJ (filiais somam). Cada NF = um pedido faturado.
+  // histórico do cliente pela quantidade de notas fiscais distintas.
+  // A base de títulos (histórico completo desde a fundação) tem prioridade
+  // sobre o Dashboard, que costuma ser um recorte do período.
   const chaveHist =
     base.cnpj && !/^0+$/.test(base.cnpj) ? base.cnpj.slice(0, 8) : normalizar(base.cliente);
-  base.nfsCliente = historico && chaveHist ? historico.get(chaveHist) ?? 0 : null;
+  const nfTitulos = titulos && titulos.nfHist && chaveHist ? titulos.nfHist.get(chaveHist) : undefined;
+  const nfDash = historico && chaveHist ? historico.get(chaveHist) : undefined;
+  base.nfsCliente = nfTitulos != null ? nfTitulos : nfDash != null ? nfDash : null;
+  base.historicoCompleto = nfTitulos != null; // veio da base de títulos
 
   // inadimplência reprova na entrada, antes de qualquer análise comercial.
   // procura primeiro o CNPJ exato; não achando, olha a raiz (grupo econômico)
@@ -1333,14 +1337,10 @@ const CHAVE_HIST = "conferencias:historico";
 const CHAVE_NOME = "conferencia:operador";
 
 async function lerGuardado(chave) {
-  try {
-    const v = localStorage.getItem(chave);
-    return v ? JSON.parse(v) : null;
-  } catch { return null; }
+  try { const v = localStorage.getItem(chave); return v ? JSON.parse(v) : null; } catch { return null; }
 }
 async function gravarGuardado(chave, valor) {
-  try { localStorage.setItem(chave, JSON.stringify(valor)); return true; }
-  catch { return false; }
+  try { localStorage.setItem(chave, JSON.stringify(valor)); return true; } catch { return false; }
 }
 
 /* ============================ leitura ============================ */
@@ -1444,7 +1444,12 @@ async function lerTitulos(arquivo) {
     const buf = await arquivo.arrayBuffer();
     let texto = new TextDecoder("utf-8").decode(buf);
     if (texto.includes("\uFFFD")) texto = new TextDecoder("windows-1252").decode(buf);
-    const r = Papa.parse(texto.replace(/^\uFEFF/, ""), { header: true, skipEmptyLines: "greedy" });
+    // detecta o separador: ; (padrão do ERP brasileiro) ou ,
+    const primeira = texto.slice(0, texto.indexOf("\n"));
+    const sep = (primeira.match(/;/g) || []).length >= (primeira.match(/,/g) || []).length ? ";" : ",";
+    const r = Papa.parse(texto.replace(/^\uFEFF/, ""), {
+      header: true, skipEmptyLines: "greedy", delimiter: sep,
+    });
     linhas = r.data;
     colunas = (r.meta.fields || []).filter((c) => c && c.trim());
   } else {
@@ -1467,7 +1472,9 @@ async function lerTitulos(arquivo) {
   const cAtraso = acha("DIASATRASO");
   const cVenc = acha("NOVADTVENC", "VENCTO", "VENCIMENTO", "DATAVENCIMENTO");
   const cValor = acha("TOTALRGERAL", "VALOR", "VALORTITULO", "TOTALR");
+  // baixa: Recbto (data de recebimento) ou Total Liquidado
   const cLiquidado = acha("TOTALRLIQUIDADO", "LIQUIDADO", "RECBTO");
+  const cNota = acha("NOTAFISCAL", "NF", "NOTA");
 
   const limite = ontemSP();
   const mapa = new Map();
@@ -1475,6 +1482,8 @@ async function lerTitulos(arquivo) {
   // passivo total: TODOS os títulos em aberto do cliente, vencidos ou não
   const aberto = new Map();
   const abertoRaiz = new Map();
+  // histórico: NFs distintas por raiz de CNPJ, sobre abertos E baixados
+  const nfPorCliente = new Map();
   let vencidos = 0;
   let emAberto = 0;
 
@@ -1482,11 +1491,24 @@ async function lerTitulos(arquivo) {
     const cnpj = normCnpj(l[cCnpj]);
     if (!cnpj || /^0+$/.test(cnpj)) continue;
 
-    // se a base informa liquidação, o título quitado não entra em nada
+    // o histórico conta a NF com o título aberto ou baixado
+    if (cNota) {
+      const nf = String(l[cNota] ?? "").trim();
+      if (nf && nf !== "0") {
+        const raiz = cnpj.slice(0, 8);
+        if (!nfPorCliente.has(raiz)) nfPorCliente.set(raiz, new Set());
+        nfPorCliente.get(raiz).add(nf);
+      }
+    }
+
+    // se a base informa liquidação, o título quitado não entra no passivo.
+    // baixa = Recbto com data preenchida, ou Total Liquidado > 0
     if (cLiquidado) {
       const liq = paraNumero(l[cLiquidado]);
       const recebido = lerData(l[cLiquidado]);
-      if ((liq != null && liq > 0) || recebido) continue;
+      const txt = String(l[cLiquidado] ?? "").trim();
+      const temData = recebido || /\d{2}[\/\-]\d{2}[\/\-]\d{2,4}/.test(txt);
+      if ((liq != null && liq > 0) || temData) continue;
     }
 
     const valor = paraNumero(String(l[cValor] ?? "").replace(",", ".")) ?? 0;
@@ -1535,10 +1557,12 @@ async function lerTitulos(arquivo) {
     registrar(cnpj.slice(0, 8), raizes);
     if (grupo) registrar("g:" + normalizar(grupo), raizes);
   }
+  const nfHist = new Map();
+  for (const [raiz, nfs] of nfPorCliente) nfHist.set(raiz, nfs.size);
   return {
-    mapa, raizes, aberto, abertoRaiz,
+    mapa, raizes, aberto, abertoRaiz, nfHist,
     linhas: linhas.length, vencidos, emAberto, clientes: mapa.size,
-    clientesAberto: aberto.size,
+    clientesAberto: aberto.size, comHistorico: nfHist.size,
   };
 }
 
@@ -1841,7 +1865,7 @@ function ValidadorPedidos() {
           onChange={(e) => receberArquivo(e.target.files?.[0])} />
 
         <section className="vp-cartao">
-          <h2>Base de títulos <span>detalhamento · abertos · csv · xlsx</span></h2>
+          <h2>Base de títulos <span>geral · abertos · baixados · csv · xlsx</span></h2>
           <div className="vp-solta" onClick={() => inputTitRef.current?.click()}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => { e.preventDefault(); receberTitulos(e.dataTransfer.files?.[0]); }}
@@ -1850,7 +1874,7 @@ function ValidadorPedidos() {
               : titulos ? (<>
                   <strong style={{ fontFamily: "var(--mono)" }}>{arquivoTit?.name}</strong>
                   <small>
-                    {titulos.vencidos} títulos vencidos · {titulos.clientes} clientes inadimplentes
+                    {titulos.vencidos} vencidos · {titulos.clientes} inadimplentes{titulos.comHistorico ? ` · histórico de ${titulos.comHistorico} clientes` : ""}
                     {" "}· clique para trocar
                   </small>
                 </>)
