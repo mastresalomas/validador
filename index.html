@@ -505,18 +505,12 @@ function conferirKitProporcional(kit, validos, somas, motivos, explicados) {
   );
   if (porProduto.some((lista) => !lista.length)) return false;
 
-  // O Kit Beef+Creatina tem desconto próprio (10% à vista, 5% cartão), diferente
-  // do padrão 8%/3%. Refaço o bruto de cada item com o desconto do kit, senão o
-  // par de R$ 109,90 não fecharia em pedido à vista ou cartão.
-  const brutoKit = (i) => {
-    const d = CONDICOES_KIT[i.pagto.rotulo];
-    return d != null ? Number((i.unit / (1 - d)).toFixed(2)) : i.bruto;
-  };
-
+  // O desconto de pagamento do kit é o mesmo do restante (10% à vista, 5%
+  // cartão), então o bruto já vem calculado corretamente em cada item.
   // preço unitário médio de cada produto, ponderado pela quantidade
   const medio = porProduto.map((lista) => {
     const q = lista.reduce((s, i) => s + (i.qtde || 0), 0);
-    return q ? lista.reduce((s, i) => s + brutoKit(i) * (i.qtde || 0), 0) / q : brutoKit(lista[0]);
+    return q ? lista.reduce((s, i) => s + i.bruto * (i.qtde || 0), 0) / q : lista[0].bruto;
   });
   const par = Number(medio.reduce((s, v) => s + v, 0).toFixed(2));
   if (Math.abs(par - kit.parPreco) > 0.5) return false; // não é este kit
@@ -757,28 +751,31 @@ const ehBooleano = (v, alvo) => String(v ?? "").trim().toLowerCase() === alvo;
 
 /* O ERP já grava o preço unitário COM o desconto da condição de pagamento.
    Para comparar com a tabela da campanha é preciso desfazer esse desconto. */
-/* Desconto padrão de pagamento embutido no preço do ERP: 8% à vista, 3% cartão.
-   O Kit Beef + Creatina tem desconto próprio (10% / 5%) — ver CONDICOES_KIT. */
+/* Desconto de pagamento embutido no preço do ERP.
+   A partir de INICIO_NOVA_CONDICAO passou a ser 10% à vista e 5% cartão;
+   antes disso era 8% e 3%. A vigência por data é necessária porque o preço
+   gravado no ERP carrega o desconto que valia quando o pedido foi feito —
+   aplicar o percentual novo a um pedido antigo devolveria um preço de tabela
+   errado e geraria divergência falsa.
+   >>> TROCAR pela data real em que a condição nova passou a valer. */
+const INICIO_NOVA_CONDICAO = "2026-09-21";
+
 const CONDICOES = [
   // antecipado e pix são pagamento à vista: não têm custo financeiro
-  { teste: /VISTA|ANTECIP|PIX/i, desconto: 0.08, financeiro: 0, rotulo: "à vista" },
-  { teste: /CART[AÃ]O/i, desconto: 0.03, financeiro: 0.045, rotulo: "cartão" },
+  { teste: /VISTA|ANTECIP|PIX/i, antes: 0.08, depois: 0.10, financeiro: 0, rotulo: "à vista" },
+  { teste: /CART[AÃ]O/i, antes: 0.03, depois: 0.05, financeiro: 0.045, rotulo: "cartão" },
 ];
 
-/* Descontos exclusivos do Kit Beef + Creatina */
-const CONDICOES_KIT = {
-  "à vista": 0.10,
-  "cartão": 0.05,
-};
-
-function condicaoPagamento(txt) {
+function condicaoPagamento(txt, dataPedido) {
   const c = CONDICOES.find((x) => x.teste.test(String(txt ?? "")));
   if (!c) return { desconto: 0, financeiro: 0.045, nome: "a prazo", rotulo: "a prazo" };
+  const d = paraData(dataPedido);
+  const desconto = d != null && d >= chaveData(INICIO_NOVA_CONDICAO) ? c.depois : c.antes;
   return {
-    desconto: c.desconto,
+    desconto,
     financeiro: c.financeiro,
     rotulo: c.rotulo,
-    nome: `${c.rotulo} −${(c.desconto * 100).toFixed(0)}%`,
+    nome: `${c.rotulo} −${(desconto * 100).toFixed(0)}%`,
   };
 }
 
@@ -817,7 +814,7 @@ function montarItens(linhas, cols) {
     const foraDoMes = !!achado.produto && !produto;
     // cada linha traz a própria condição de pagamento, e o desconto dela
     // já vem embutido no preço unitário gravado pelo ERP
-    const pagto = condicaoPagamento(l[cols.condPgto]);
+    const pagto = condicaoPagamento(l[cols.condPgto], l[cols.dataPedido]);
     const unit = paraNumero(l[cols.valUnit]);
     const total = paraNumero(l[cols.valTotal]) ?? 0;
     return {
