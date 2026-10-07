@@ -15,7 +15,6 @@ html,body{margin:0;height:100%;background:#E9EDF1}#raiz{min-height:100%}
 <div id="raiz"><div class="vp-carregando">Carregando o validador…</div></div>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef } = React;
-
 /* ============================================================
    TABELA UNDER'S BROTHERS — AGOSTO
    precos = [5.000, 10.000, 20.000, 30.000, 50.000, 100.000, 200.000]
@@ -42,7 +41,8 @@ const TOLERANCIA_PROTEINA = 0.03; // 3 pontos percentuais sobre o limite vigente
    Para encerrar ou prorrogar a campanha, mexa só aqui. */
 const LIMITE_PADRAO = 0.5;
 const VIGENCIAS = [
-  { de: "2026-08-01", ate: "2026-09-30", limite: 0.7, nome: "exceção de agosto e setembro" },
+  // A campanha de 70% foi prorrogada: ainda ativa em outubro (válida até 31/10).
+  { de: "2026-08-01", ate: "2026-10-31", limite: 0.7, nome: "exceção de agosto a outubro" },
 ];
 
 function paraData(txt) {
@@ -117,6 +117,17 @@ const PROTEINAS = new Set([
   "PROTEIN CRUSH 900G",
   "BEEF PROTEIN CRUSH",
 ]);
+
+/* ---------- Protein Crush Milk Shake (outubro) ----------
+   Linha nova de proteína (BANANA, CHOCOLATE COM AVELÃ, CHOCOTINE, COOKIES,
+   MILK, MORANGO, BAUNILHA — 900G). Regras próprias:
+   1) NÃO entra na conta de 70/30 — sai do numerador e do denominador.
+   2) O total de um pedido com estes itens tem de se igualar ao de outro
+      pedido do mesmo cliente dentro do mês (par de mesmo valor).
+   Reconhecida pelo nome do ERP ("MILK SHAKE"), já que a tabela de preços
+   de outubro ainda não entrou no validador. */
+const MILK_SHAKE = { de: "2026-10-01", ate: "2026-10-31" };
+const ehMilkShake = (nomeErp) => /MILK\s*SHAKE/i.test(normalizar(nomeErp));
 
 /* Bonificação por faixa — percentual sobre o total de mix.
    PENDENTE: assim que a tabela chegar, preencher aqui na mesma ordem das FAIXAS. */
@@ -290,7 +301,7 @@ const KITS = [
   },
   {
     nome: "Kit Clinical Series",
-    de: "2026-09-01", ate: "2026-09-30",
+    de: "2026-09-01", ate: "2026-10-31", // prorrogado: segue ativo em outubro
     total: 4988.28,
     // todos os preços deste kit são os da coluna de R$ 200.000 da tabela
     itens: [
@@ -319,6 +330,39 @@ const KITS = [
       { produto: "BEEF PROTEIN CRUSH", qtde: 48, preco: 89.96, alternativo: 89.9 },
       { produto: "CREATINE 300G", qtde: 48, preco: 20.0, alternativo: 19.94 },
     ],
+  },
+  {
+    // ---------- Kit Beef + Creatina — OUTUBRO ----------
+    // Beef R$ 89,90 pareada 1 para 1 com QUALQUER creatina. O representante
+    // combina a beef com qualquer composição de creatina na proporção 1:1.
+    // Preços por creatina (desconto impresso ao lado):
+    //   CREATINE 300G .......... 86,29% .. R$ 20,00  -> par R$ 109,90
+    //   CREATINE SABOR 300G .... 85,00% .. R$ 24,75  -> par R$ 114,65
+    //   CREATINE 500G .......... 85,00% .. R$ 32,99  -> par R$ 122,89
+    // Mínimo de 48 kits (pares).
+    nome: "Kit Beef + Creatina",
+    de: "2026-10-01", ate: "2026-10-31",
+    beefPair: true,
+    minimo: 48,
+    beef: { produto: "BEEF PROTEIN CRUSH", preco: 89.9 },
+    creatinas: {
+      "CREATINE 300G": 20.0,
+      "CREATINE SABOR 300G": 24.75,
+      "CREATINE 500G": 32.99,
+    },
+  },
+  {
+    // ---------- Kit "Crescer" — OUTUBRO ----------
+    // 2 Proteínas + 1 Thermo + 1 Pré-treino, todos na tabela de R$ 200.000.
+    // A proporção permitida é 2 proteína para 2 produtos de mix (1:1 em
+    // unidades). O preço de cada item é o da coluna de R$ 200.000, mesmo que
+    // o total do pedido não alcance essa faixa.
+    // OBS.: a arte do kit (quantidades/total fechados) não entrou nesta versão;
+    // a validação aqui é pela composição 2:2 e pelos preços da coluna 200K.
+    nome: "Kit Crescer",
+    de: "2026-10-01", ate: "2026-10-31",
+    crescer: true,
+    faixaIndice: 6, // coluna de R$ 200.000 em TABELA[].precos
   },
 ];
 
@@ -549,12 +593,101 @@ function conferirKitProporcional(kit, validos, somas, motivos, explicados) {
   return true;
 }
 
+/* Kit Beef + Creatina de outubro: beef pareada 1:1 com qualquer creatina.
+   Cada creatina tem o seu preço; o que importa é a proporção 1 beef : 1
+   creatina (somando todos os tipos) e o mínimo de 48 pares. */
+function conferirKitBeef(kit, validos, somas, motivos, explicados) {
+  const nota = (nivel, texto) => motivos.push({ nivel, texto, kit: true });
+  const perto = (a, b) => a != null && Math.abs(a - b) <= 0.5;
+
+  const beefs = validos.filter(
+    (i) => i.produto && i.produto.nome === kit.beef.produto && perto(i.bruto, kit.beef.preco)
+  );
+  // creatinas no preço do kit, de qualquer tipo
+  const creas = validos.filter((i) => {
+    if (!i.produto || i.bruto == null) return false;
+    const alvo = kit.creatinas[i.produto.nome];
+    return alvo != null && perto(i.bruto, alvo);
+  });
+  if (!beefs.length || !creas.length) return false; // não é este kit
+
+  [...beefs, ...creas].forEach((i) => explicados.add(i));
+  const qBeef = beefs.reduce((s, i) => s + (i.qtde || 0), 0);
+  const qCrea = creas.reduce((s, i) => s + (i.qtde || 0), 0);
+  // detalhe dos tipos de creatina usados
+  const porTipo = new Map();
+  for (const i of creas) porTipo.set(i.produto.nome, (porTipo.get(i.produto.nome) || 0) + (i.qtde || 0));
+  const detalhe = [...porTipo].map(([n, q]) => `${q} ${n.toLowerCase()}`).join(" + ");
+  const valor = [...beefs, ...creas].reduce((s, i) => s + i.bruto * (i.qtde || 0), 0);
+
+  if (qBeef !== qCrea) {
+    nota("alerta",
+      `${kit.nome}: a proporção é 1 beef para 1 creatina e o pedido tem ` +
+      `${qBeef} beef para ${qCrea} creatina (${detalhe}). Faltam pares para fechar`);
+    return true;
+  }
+  if (qBeef < kit.minimo) {
+    nota("alerta",
+      `${kit.nome}: ${qBeef} kits no pedido, abaixo do mínimo de ${kit.minimo}. ` +
+      `O preço do kit vale a partir de ${kit.minimo} kits`);
+    return true;
+  }
+  nota("info",
+    `${kit.nome}: ${qBeef} pares conferidos — beef a ${moeda(kit.beef.preco)} com ` +
+    `${detalhe} (${moeda(valor)}). Proporção 1:1 e mínimo de ${kit.minimo} atendidos`);
+  return true;
+}
+
+/* Kit Crescer de outubro: 2 proteínas + 2 mix na coluna de R$ 200.000, com a
+   proporção de 2 proteína para 2 mix (mix não pode passar da proteína). Vale
+   mesmo que o total do pedido não chegue à faixa de R$ 200.000. */
+function conferirKitCrescer(kit, validos, somas, motivos, explicados, faixa) {
+  const nota = (nivel, texto) => motivos.push({ nivel, texto, kit: true });
+  // se o pedido já tem direito à faixa de 200K pelo valor, o preço se explica
+  // sozinho e não há kit a invocar
+  if (faixa && faixa.indice >= kit.faixaIndice) return false;
+
+  const ix = kit.faixaIndice;
+  const noPreco200k = validos.filter(
+    (i) => i.produto && i.bruto != null && Math.abs(i.produto.precos[ix] - i.bruto) <= 0.03
+  );
+  const prot = noPreco200k.filter((i) => PROTEINAS.has(i.produto.nome));
+  const mix = noPreco200k.filter((i) => !PROTEINAS.has(i.produto.nome));
+  // precisa ter proteína e mix na composição para ser o Kit Crescer
+  if (!prot.length || !mix.length) return false;
+
+  [...prot, ...mix].forEach((i) => explicados.add(i));
+  const qProt = prot.reduce((s, i) => s + (i.qtde || 0), 0);
+  const qMix = mix.reduce((s, i) => s + (i.qtde || 0), 0);
+  const valor = [...prot, ...mix].reduce((s, i) => s + i.bruto * (i.qtde || 0), 0);
+
+  if (qMix > qProt) {
+    nota("erro",
+      `${kit.nome}: a proporção permitida é 2 proteína para 2 mix e o pedido tem ` +
+      `${qProt} un de proteína para ${qMix} un de mix na tabela de R$ 200.000. ` +
+      `O excedente de mix precisa de mais proteína ou sai da condição do kit`);
+    return true;
+  }
+  nota("info",
+    `${kit.nome}: ${qProt} proteína + ${qMix} mix na tabela de R$ 200.000 ` +
+    `(${moeda(valor)}), dentro da proporção de 2 para 2`);
+  return true;
+}
+
 function conferirKits(validos, data, motivos, explicados, faixa) {
   const somas = somarPorProduto(validos);
   let achou = false;
   const marcar = (n) => { for (let i = n; i < motivos.length; i++) motivos[i].kit = true; };
   for (const kit of KITS) {
     if (!dentroDaVigencia(data, kit)) continue;
+    if (kit.beefPair) {
+      if (conferirKitBeef(kit, validos, somas, motivos, explicados)) achou = true;
+      continue;
+    }
+    if (kit.crescer) {
+      if (conferirKitCrescer(kit, validos, somas, motivos, explicados, faixa)) achou = true;
+      continue;
+    }
     if (kit.proporcional) {
       if (conferirKitProporcional(kit, validos, somas, motivos, explicados)) achou = true;
       continue;
@@ -842,8 +975,33 @@ function resumirNegociacao(ids, linhas, cols) {
     validos.filter((i) => i.produto && PROTEINAS.has(i.produto.nome))
       .reduce((s, i) => s + i.totalBruto, 0).toFixed(2)
   );
-  const fatia = totalBruto > 0 ? proteina / totalBruto : 0;
+  // Protein Crush Milk Shake não entra na regra de 70/30: sai do denominador
+  // (e já fica fora do numerador por não estar em PROTEINAS).
+  const milkBruto = Number(
+    validos.filter((i) => ehMilkShake(i.nomeErp))
+      .reduce((s, i) => s + i.totalBruto, 0).toFixed(2)
+  );
+  const razaoBase = Number((totalBruto - milkBruto).toFixed(2));
+  const fatia = razaoBase > 0 ? proteina / razaoBase : 0;
   const faixa = faixaDe(totalBruto);
+  // total líquido por pedido e quais pedidos têm Milk Shake — para o par de
+  // mesmo valor exigido na regra do Milk Shake
+  const totaisPorPedido = new Map();
+  const milkPorPedido = new Set();
+  {
+    const porId = new Map();
+    for (const l of linhas) {
+      const pid = String(l[cols.pedido] ?? "").trim();
+      if (!pid) continue;
+      if (!porId.has(pid)) porId.set(pid, []);
+      porId.get(pid).push(l);
+    }
+    for (const [pid, ls] of porId) {
+      const vs = montarItens(ls, cols).filter((i) => i.ehPA && !i.bonificado);
+      totaisPorPedido.set(pid, Number(vs.reduce((s, i) => s + i.total, 0).toFixed(2)));
+      if (vs.some((i) => ehMilkShake(i.nomeErp))) milkPorPedido.add(pid);
+    }
+  }
   const regime = regimeProteina(String(linhas[0]?.[cols.dataPedido] ?? "").trim());
   const naTabela = validos.filter(
     (i) => i.produto && i.bruto != null && i.produto.precos.some((p) => Math.abs(p - i.bruto) <= 0.03)
@@ -858,9 +1016,9 @@ function resumirNegociacao(ids, linhas, cols) {
     validos.every((i) => i.produto && PROTEINAS.has(i.produto.nome));
   const teto = somenteProteina ? 1 : regime.teto;
   return {
-    ids, total, totalBruto, proteina, somenteProteina, campanhaProteina: somenteProteina, teto,
+    ids, total, totalBruto, proteina, milkBruto, razaoBase, totaisPorPedido, milkPorPedido, somenteProteina, campanhaProteina: somenteProteina, teto,
     somas: somarPorProduto(validos),
-    mix: Number((totalBruto - proteina).toFixed(2)),
+    mix: Number((razaoBase - proteina).toFixed(2)),
     fatia, faixa, regime,
     habilitado: totalBruto > 0 && fatia <= teto + 1e-9,
     naTabela, adesao,
@@ -1057,14 +1215,18 @@ function analisarPedido(id, linhas, cols, titulos, neg, historico) {
     }
   } else {
     if (!habilitado) {
-      const tirar = (neg.proteina - neg.teto * neg.totalBruto) / (1 - neg.teto);
-      const somar = neg.proteina / neg.teto - neg.totalBruto;
+      const base = neg.razaoBase != null ? neg.razaoBase : neg.totalBruto;
+      const tirar = (neg.proteina - neg.teto * base) / (1 - neg.teto);
+      const somar = neg.proteina / neg.teto - base;
+      const notaMilk = neg.milkBruto > 0
+        ? ` (fora da conta ${moeda(neg.milkBruto)} de Milk Shake)`
+        : "";
       motivos.push({
         nivel: "erro",
         texto:
           `Não habilitado à campanha: proteína é ${(fatia * 100).toFixed(1)}% ` +
           `${irmaos.length ? "da negociação" : "do pedido"} ` +
-          `(${moeda(neg.proteina)} de ${moeda(neg.totalBruto)}), acima do teto de ` +
+          `(${moeda(neg.proteina)} de ${moeda(base)}${notaMilk}), acima do teto de ` +
           `${(neg.teto * 100).toFixed(0)}% (${regime.nome}). Falta tirar ${moeda(tirar)} ` +
           `em proteína ou somar ${moeda(somar)} em mix`,
       });
@@ -1107,6 +1269,9 @@ function analisarPedido(id, linhas, cols, titulos, neg, historico) {
       const ixCarta = faixa.carta ? faixa.carta.indice : -1;
       for (const i of validos) {
         if (explicados.has(i)) continue;
+        // Milk Shake tem regra própria (par de mesmo valor no mês) e não é
+        // conferido pela tabela por faixa nesta versão.
+        if (ehMilkShake(i.nomeErp)) { explicados.add(i); continue; }
         if (i.foraDoMes) {
           motivos.push({
             nivel: "alerta",
@@ -1200,6 +1365,31 @@ function analisarPedido(id, linhas, cols, titulos, neg, historico) {
         "aprovada. Faixa, proteína e margem ficam registradas abaixo, mas não barram",
     });
   }
+  // Protein Crush Milk Shake: o pedido precisa de um par de mesmo valor do
+  // mesmo cliente dentro do mês (outro pedido da negociação).
+  if (neg.milkPorPedido && neg.milkPorPedido.has(id)) {
+    const meu = neg.totaisPorPedido.get(id) || 0;
+    const par = neg.ids.find(
+      (x) => x !== id && Math.abs((neg.totaisPorPedido.get(x) || 0) - meu) <= 0.05
+    );
+    motivos.push(
+      par
+        ? {
+            nivel: "info",
+            texto:
+              `Protein Crush Milk Shake: pedido pareado com o pedido ${par}, ` +
+              `de mesmo valor (${moeda(meu)}) no mês`,
+          }
+        : {
+            nivel: "alerta",
+            texto:
+              `Protein Crush Milk Shake (${moeda(meu)}): não há outro pedido de ` +
+              `mesmo valor do cliente no mês. Estes itens precisam de um pedido-par ` +
+              `de igual valor dentro do mês`,
+          }
+    );
+  }
+
   if (motivoMC) motivos.unshift(motivoMC);
   if (motivoDebito) motivos.unshift(motivoDebito);
 
@@ -1596,9 +1786,9 @@ function ValidadorPedidos() {
 
   useEffect(() => {
     (async () => {
-      const n = await lerGuardado(CHAVE_NOME);
+      const n = await lerGuardado(CHAVE_NOME, false);
       if (n) { setOperador(n); setNomeSalvo(true); }
-      const h = await lerGuardado(CHAVE_HIST);
+      const h = await lerGuardado(CHAVE_HIST, true);
       setHistorico(Array.isArray(h) ? h : []);
     })();
   }, []);
@@ -1606,7 +1796,7 @@ function ValidadorPedidos() {
   async function salvarNome() {
     const l = operador.trim();
     if (!l) return;
-    await gravarGuardado(CHAVE_NOME, l);
+    await gravarGuardado(CHAVE_NOME, l, false);
     setOperador(l); setNomeSalvo(true);
   }
 
@@ -1768,9 +1958,9 @@ function ValidadorPedidos() {
         quando: agora(), quem: operador || "sem nome", arquivo: arquivo.name,
         fila, pedidos: visiveis.length, bloqueados: contagem.erro + contagem.inadimplente, atencao: contagem.alerta,
       };
-      const atual = (await lerGuardado(CHAVE_HIST)) || [];
+      const atual = (await lerGuardado(CHAVE_HIST, true)) || [];
       const novo = [reg, ...(Array.isArray(atual) ? atual : [])].slice(0, 40);
-      if (await gravarGuardado(CHAVE_HIST, novo)) setHistorico(novo);
+      if (await gravarGuardado(CHAVE_HIST, novo, true)) setHistorico(novo);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dados, fila]);
@@ -2225,6 +2415,7 @@ function ValidadorPedidos() {
     </div>
   );
 }
+
 
 ReactDOM.createRoot(document.getElementById("raiz")).render(<ValidadorPedidos />);
 </script></body></html>
