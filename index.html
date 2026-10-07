@@ -165,6 +165,12 @@ function calcularMapa(cod, produto) {
   const tem = (...ps) => ps.every((p) => n.includes(p));
   const ok = (nome) => ({ produto: TABELA[nome] || null, familia: "produto" });
 
+  // Protein Crush Milk Shake é linha própria: tem de ser reconhecida ANTES do
+  // Protein Crush comum, senão o nome ("PROTEIN CRUSH MILK SHAKE ... 900G")
+  // cairia em PROTEIN CRUSH 900G e os dois ficariam iguais. Ela não tem preço
+  // de tabela ainda e não conta no 70/30; mantém o nome do ERP no cartão.
+  if (/MILK\s*SHAKE/.test(n)) return { produto: null, familia: "milkshake", milkshake: true };
+
   if (tem("ISO HYDRO CLINICAL") || tem("ISOHYDRO", "CLINICAL")) return ok("ISO HYDRO CLINICAL 450G");
   if (tem("ISOHYDRO") || tem("ISO HYDRO")) return ok("ISO HYDRO CRUSH");
   if (tem("100 WHEY CRUSH")) return ok("100% WHEY CRUSH");
