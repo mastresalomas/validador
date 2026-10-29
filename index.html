@@ -847,6 +847,9 @@ function icmsDe(uf) {
 }
 
 const DEDUCOES = { comissao: 0.07, frete: 0.031, pis: 0, financeiro: 0.045 };
+// Custo unitário do Protein Crush Milk Shake (setado em 30,00 em outubro).
+// Ele não está na TABELA por faixa, então o custo entra por aqui, pelo nome.
+const CUSTO_MILK_SHAKE = 30.0;
 const MC_META = 0.3;      // a partir daqui, aprovado
 const MC_DIRETORIA = 0.25; // entre 25% e 30%, analisar
 
@@ -857,7 +860,10 @@ function margemDe(itens, uf) {
   const porItem = [];
   for (const i of itens) {
     faturamento += i.total;
-    const c = i.produto ? CUSTOS[i.produto.nome] : null;
+    // o Milk Shake não está na TABELA (produto === null), então o custo vem
+    // pela constante própria; os demais vêm da planilha de precificação
+    const c = i.produto ? CUSTOS[i.produto.nome]
+      : ehMilkShake(i.nomeErp) ? CUSTO_MILK_SHAKE : null;
     // o custo financeiro vem da própria condição de pagamento da linha
     const fin = i.pagto.financeiro;
     financeiro += i.total * fin;
@@ -920,6 +926,16 @@ function condicaoPagamento(txt, dataPedido) {
 
 const semDesconto = (v, desconto) =>
   v == null ? null : Number((v / (1 - desconto)).toFixed(2));
+
+/* Classifica a forma de pagamento do pedido em dois blocos para o filtro:
+   "boleto" = pagamento a prazo (nem à vista, nem cartão); "demais" = à vista
+   (inclui antecipado/pix) ou cartão. Sem condição legível cai em boleto, que
+   é o bucket padrão "a prazo" do próprio cálculo. */
+const ehBoletoPedido = (cond) => {
+  const t = normalizar(cond);
+  if (/BOLET|PRAZO/.test(t)) return true;
+  return !/VISTA|ANTECIP|PIX/.test(t) && !/CARTAO/.test(t);
+};
 
 /* ============================ análise ============================ */
 const ehSemVencimento = (txt) => /S\s*\/\s*(VENC|VALOR)/i.test(String(txt ?? ""));
@@ -1784,6 +1800,7 @@ function ValidadorPedidos() {
   const [carregando, setCarregando] = useState(false);
   const [arrastando, setArrastando] = useState(false);
   const [fila, setFila] = useState("comercial");
+  const [formaPgto, setFormaPgto] = useState("todas"); // todas | boleto | demais (só na fila comercial)
   const [abertos, setAbertos] = useState(new Set());
   const [historico, setHistorico] = useState([]);
   const [verHistorico, setVerHistorico] = useState(false);
@@ -1913,10 +1930,20 @@ function ValidadorPedidos() {
     // mesmo que a coluna de liberação tenha vindo vazia no export
     const JA_SEGUIU = ["FATURADO", "EM SEPARACAO", "CANCELADO"];
     const seguiu = (p) => JA_SEGUIU.some((x) => normalizar(p.status).includes(x));
-    const f = (p) => {
+    const passaFila = (p) => {
       if (fila === "comercial") return p.libComl === "" && !seguiu(p);
       if (fila === "financeiro")
         return p.libComl.toLowerCase() === "true" && p.libFin === "" && !seguiu(p);
+      return true;
+    };
+    const f = (p) => {
+      if (!passaFila(p)) return false;
+      // o sub-filtro de forma de pagamento só vale na fila comercial
+      if (fila === "comercial" && formaPgto !== "todas") {
+        const boleto = ehBoletoPedido(p.condPgto);
+        if (formaPgto === "boleto" && !boleto) return false;
+        if (formaPgto === "demais" && boleto) return false;
+      }
       return true;
     };
     const lista = dados.pedidos.filter(f);
@@ -1946,7 +1973,7 @@ function ValidadorPedidos() {
       })
       .sort((a, b) => a.quando - b.quando || a.g[0].id.localeCompare(b.g[0].id))
       .flatMap(({ g }) => g);
-  }, [dados, fila]);
+  }, [dados, fila, formaPgto]);
 
   const contagem = useMemo(() => {
     const c = { inadimplente: 0, erro: 0, carta: 0, alerta: 0, negociado: 0, kit: 0, liberado: 0, bonificacao: 0 };
@@ -2096,6 +2123,14 @@ function ValidadorPedidos() {
                     <button key={v} className="vp-chip" aria-pressed={fila === v} onClick={() => setFila(v)}>{r}</button>
                   ))}
               </div>
+              {fila === "comercial" && (
+                <div className="vp-chips" style={{ marginTop: 6 }}>
+                  {[["todas", "Todas as formas"], ["boleto", "Boleto"], ["demais", "Demais formas"]]
+                    .map(([v, r]) => (
+                      <button key={v} className="vp-chip" aria-pressed={formaPgto === v} onClick={() => setFormaPgto(v)}>{r}</button>
+                    ))}
+                </div>
+              )}
               <div className="vp-tally">
                 <div><b style={{ color: "#6B0F0A" }}>{contagem.inadimplente}</b><span style={{ color: "#6B0F0A" }}>Inadimplentes</span></div>
                 <div><b style={{ color: "var(--bloq)" }}>{contagem.erro}</b><span style={{ color: "var(--bloq)" }}>Bloqueados</span></div>
