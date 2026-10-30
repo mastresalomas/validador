@@ -2324,10 +2324,14 @@ function ValidadorPedidos() {
                               </span>
                             </div>
                             {(() => {
+                              // Milk Shake entra no porItem sem produto de tabela
+                              // (produto === null); usa o nome do ERP como rótulo
+                              const nomeItem = (d) => (d.produto ? d.produto.nome : d.nomeErp);
                               const vistos = new Set();
                               const distintos = p.margem.porItem.filter((d) => {
-                                if (vistos.has(d.produto.nome)) return false;
-                                vistos.add(d.produto.nome);
+                                const nome = nomeItem(d);
+                                if (vistos.has(nome)) return false;
+                                vistos.add(nome);
                                 return true;
                               });
                               if (distintos.length < 2) return null;
@@ -2336,7 +2340,7 @@ function ValidadorPedidos() {
                                   menor margem:{" "}
                                   {distintos.slice(0, 3).map((d, i) => (
                                     <span key={i}>
-                                      {d.produto.nome} <b>{(d.mcPctItem * 100).toFixed(0)}%</b>
+                                      {nomeItem(d)} <b>{(d.mcPctItem * 100).toFixed(0)}%</b>
                                       {i < Math.min(2, distintos.length - 1) ? " · " : ""}
                                     </span>
                                   ))}
