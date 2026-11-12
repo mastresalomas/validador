@@ -280,6 +280,205 @@ function catalogoDe(dataPedido) {
   };
 }
 
+/* ============================================================
+   BLACK NOVEMBER 2026 — regime próprio por DATA DO PEDIDO
+   Vale de 09/11/2026 em diante. Pedidos até 08/11 seguem as regras
+   antigas (tabela de agosto, faixa pelo teto, kits, Milk Shake par).
+   Diferenças do Black: faixa pelo PISO, tabela nova, classes
+   Proteína/Neutra/Mix, teto de proteína por faixa, oferta de alto
+   volume (Beef/Milk Shake), bonificação de creatina, sem kits.
+   ============================================================ */
+const DATA_BLACK_INI = "2026-11-09";
+const DATA_BLACK_DESC_FIM = "2026-11-15"; // último dia com desconto de cartão/à vista
+const ehBlack = (dataPedido) => {
+  const d = paraData(dataPedido);
+  return d != null && d >= chaveData(DATA_BLACK_INI);
+};
+const blackComDesconto = (dataPedido) => {
+  const d = paraData(dataPedido);
+  return d != null && d >= chaveData(DATA_BLACK_INI) && d <= chaveData(DATA_BLACK_DESC_FIM);
+};
+
+/* Tabela Under Brothers de novembro.
+   [nome, cheio, [5K,10K,20K,30K,50K,100K,200K], classe, grupo]
+   classe: "proteina" | "neutra" | "mix"; grupo: "pretreino" | "termo" | null */
+const TABELA_NOV = [
+  ["BEEF PROTEIN CRUSH 910G", 265.74, [95.9, 94.9, 93.9, 92.9, 91.9, 90.9, 89.9], "proteina", null],
+  ["PROTEIN CRUSH MILK SHAKE 900G", 240.0, [75.9, 74.9, 73.9, 72.9, 71.9, 70.9, 69.9], "proteina", null],
+  ["ISOHYDRO INFINITE WHEY 450G", 499.9, [184.9, 184.9, 184.9, 184.9, 184.9, 184.9, 184.9], "neutra", null],
+  ["BETA ALANINE 300G", 129.9, [39.9, 39.9, 39.9, 39.9, 39.9, 39.9, 39.9], "mix", null],
+  ["CREATINE 150G", 89.9, [13.9, 13.9, 13.9, 13.9, 13.9, 13.9, 13.9], "mix", null],
+  ["CREATINE 300G SABORES", 145.9, [24.9, 24.9, 24.9, 24.9, 24.9, 24.9, 24.9], "mix", null],
+  ["CREATINE 300G SEM SABOR", 145.9, [20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0], "mix", null],
+  ["CREATINE 500G", 219.9, [32.9, 32.9, 32.9, 32.9, 32.9, 32.9, 32.9], "mix", null],
+  ["GLUTAMINA 300G", 124.9, [44.9, 44.9, 44.9, 44.9, 44.9, 44.9, 44.9], "mix", null],
+  ["FCKNG BOOSTER 300G", 179.0, [64.9, 63.9, 62.9, 62.9, 61.9, 60.9, 59.9], "mix", "pretreino"],
+  ["FCKNG BOOSTER 600G", 269.0, [98.9, 97.9, 96.9, 95.9, 94.9, 93.9, 92.9], "mix", "pretreino"],
+  ["RAMPAGE 300G", 209.9, [75.9, 74.9, 73.9, 72.9, 71.9, 70.9, 69.9], "mix", "pretreino"],
+  ["WARZONE NIGHT BATTLE 360G", 219.9, [85.9, 84.9, 83.9, 82.9, 81.9, 80.9, 79.9], "mix", "pretreino"],
+  ["WARZONE ROCKET ENERGY 450G", 269.0, [103.9, 102.9, 101.9, 100.9, 99.9, 98.9, 97.9], "mix", "pretreino"],
+  ["DIMETHYLEX 60 CAPS", 167.9, [50.9, 49.9, 48.9, 47.9, 46.9, 45.9, 44.9], "mix", "termo"],
+  ["DIMETHYLEX STIM FREE 60 CAPS", 139.9, [46.9, 45.9, 44.9, 43.9, 42.9, 41.9, 40.9], "mix", "termo"],
+  ["X-CARNITINE 480ML", 159.9, [55.9, 54.9, 53.9, 52.9, 51.9, 50.9, 49.9], "mix", "termo"],
+  ["CAFEINA ANIDRA 60 CAPS", 69.9, [31.9, 30.9, 29.9, 28.9, 27.9, 26.9, 25.9], "mix", null],
+  ["COENZIMA Q10 NANO 20ML", 289.9, [106.9, 105.9, 104.9, 103.9, 102.9, 101.9, 99.9], "mix", null],
+  ["COQ-10 60 CAPS", 140.0, [55.9, 54.9, 53.9, 52.9, 51.9, 50.9, 49.9], "mix", null],
+  ["MAGNESIO INOSITOL 300G", 269.9, [107.96, 106.32, 104.66, 103.03, 101.36, 99.73, 98.07], "mix", null],
+  ["MULTIVITAMINICO 90 CAPS", 105.0, [45.9, 44.9, 43.9, 42.9, 41.9, 40.9, 39.9], "mix", null],
+  ["OMEGA-3 120 CAPS", 249.9, [85.9, 84.9, 83.9, 82.9, 81.9, 80.9, 79.9], "mix", null],
+  ["OMEGA-3 60 CAPS", 134.9, [49.9, 48.9, 47.9, 46.9, 45.9, 44.9, 43.9], "mix", null],
+  ["OSTEO REPAIR 60 CAPS", 147.0, [56.9, 55.9, 54.9, 53.9, 52.9, 51.9, 50.9], "mix", null],
+  ["VITAMINA D3 + K2 30ML", 149.9, [56.9, 55.9, 54.9, 53.9, 52.9, 51.9, 50.9], "mix", null],
+  ["TESTO CYCLE 120 CAPS", 124.9, [46.9, 45.9, 44.9, 43.9, 42.9, 41.9, 40.9], "mix", null],
+  ["CAPTAIN GAINER 3KG", 319.9, [129.9, 128.9, 127.9, 126.9, 125.9, 124.9, 123.9], "mix", null],
+  ["BARRA BUENISSIMO 12 UN", 224.9, [78.9, 77.9, 76.9, 75.9, 74.9, 73.9, 72.9], "mix", null],
+].reduce((m, [nome, tabela, precos, classe, grupo]) => {
+  m[nome] = { nome, tabela, precos, classe, grupo };
+  return m;
+}, {});
+
+/* Custos de novembro (planilha "custos") — valem para qualquer data. */
+const CUSTOS_NOV = {
+  "BEEF PROTEIN CRUSH 910G": 37.21, "PROTEIN CRUSH MILK SHAKE 900G": 21.52,
+  "CAFEINA ANIDRA 60 CAPS": 5.11, "COENZIMA Q10 NANO 20ML": 23.08,
+  "ISOHYDRO INFINITE WHEY 450G": 67.49, "BETA ALANINE 300G": 8.22,
+  "CREATINE 150G": 5.13, "CREATINE 300G SABORES": 8.42, "CREATINE 300G SEM SABOR": 7.87,
+  "CREATINE 500G": 13.43, "GLUTAMINA 300G": 16.43, "FCKNG BOOSTER 300G": 8.49,
+  "FCKNG BOOSTER 600G": 13.7, "RAMPAGE 300G": 9.01, "WARZONE NIGHT BATTLE 360G": 12.02,
+  "WARZONE ROCKET ENERGY 450G": 22.95, "X-CARNITINE 480ML": 12.64, "COQ-10 60 CAPS": 13.96,
+  "MAGNESIO INOSITOL 300G": 18.91, "MULTIVITAMINICO 90 CAPS": 12.61, "OMEGA-3 120 CAPS": 23.85,
+  "OMEGA-3 60 CAPS": 12.81, "OSTEO REPAIR 60 CAPS": 10.3, "VITAMINA D3 + K2 30ML": 9.9,
+  "TESTO CYCLE 120 CAPS": 8.33, "CAPTAIN GAINER 3KG": 46.71, "BARRA BUENISSIMO 12 UN": 34.71,
+  "DIMETHYLEX 60 CAPS": 5.5, "DIMETHYLEX STIM FREE 60 CAPS": 5.72,
+};
+/* Produtos fora da planilha nova mantêm o custo de agosto. */
+const CUSTOS_AGOSTO_EXTRA = {
+  "100% WHEY CRUSH": 58.78, "PROTEIN CRUSH 450G": 27.87, "PROTEIN CRUSH 900G": 51.94,
+  "ISO HYDRO CRUSH": 83.31, "ISO HYDRO CLINICAL 450G": 44.99, "CLEMBUTER UNDER": 6.86,
+  "DIMETHYLEX TIME RELEASE": 12.66, "DISPLAY FCKNG BOOSTER": 27.37,
+};
+const custoNovDe = (nomeCanon) =>
+  nomeCanon == null ? null : (CUSTOS_NOV[nomeCanon] ?? CUSTOS_AGOSTO_EXTRA[nomeCanon] ?? null);
+
+/* Classe das proteínas que saíram da tabela de novembro: contam como NEUTRA
+   (nem proteína nem mix na proporção, mas entram no valor da faixa). */
+const NEUTRAS_FORA_NOV = new Set([
+  "100% WHEY CRUSH", "PROTEIN CRUSH 450G", "PROTEIN CRUSH 900G",
+  "ISO HYDRO CRUSH", "ISO HYDRO CLINICAL 450G",
+]);
+
+/* Oferta de alto volume (09/11 a 30/11): preço bruto (boleto) de cada produto.
+   Mínimo de 200 un do mesmo produto somando os pedidos do cliente no mês. */
+const OFERTA_BLACK = {
+  "BEEF PROTEIN CRUSH 910G": 99.0,
+  "PROTEIN CRUSH MILK SHAKE 900G": 79.9,
+};
+const OFERTA_MINIMO = 200;
+/* teto de proteína por faixa (índice 0..6 = 5K..200K) */
+const TETO_PROT_BLACK = [0.5, 0.5, 0.6, 0.6, 0.7, 0.7, 0.8];
+
+function calcularMapaNov(cod, produto) {
+  if (cod.startsWith("ACE")) return { produto: null, familia: "vestuário/acessório", classe: null };
+  if (cod.startsWith("EMB")) return { produto: null, familia: "embalagem", classe: null };
+  const n = normalizar(produto);
+  const tem = (...ps) => ps.every((p) => n.includes(p));
+  const nov = (nome) => {
+    const p = TABELA_NOV[nome] || null;
+    return { produto: p, classe: p ? p.classe : "mix", foraTabelaNov: !p, familia: "produto", grupo: p ? p.grupo : null, nomeCanon: nome };
+  };
+  // fora da tabela de novembro, mas reconhecido para classe/custo/apontamento
+  const fora = (nome, classe) => ({ produto: null, classe, foraTabelaNov: true, familia: "produto", grupo: null, nomeCanon: nome });
+
+  // Milk Shake antes do Protein Crush comum
+  if (/MILK\s*SHAKE/.test(n)) return nov("PROTEIN CRUSH MILK SHAKE 900G");
+  if (tem("BEEF PROTEIN")) return nov("BEEF PROTEIN CRUSH 910G");
+  if (tem("INFINITE")) return nov("ISOHYDRO INFINITE WHEY 450G");
+  // proteínas que saíram da tabela de novembro (neutras)
+  if (tem("ISO HYDRO CLINICAL") || tem("ISOHYDRO", "CLINICAL")) return fora("ISO HYDRO CLINICAL 450G", "neutra");
+  if (tem("ISOHYDRO") || tem("ISO HYDRO")) return fora("ISO HYDRO CRUSH", "neutra");
+  if (tem("100 WHEY CRUSH")) return fora("100% WHEY CRUSH", "neutra");
+  if (tem("PROTEIN CRUSH")) {
+    if (n.includes("900")) return fora("PROTEIN CRUSH 900G", "neutra");
+    if (n.includes("450")) return fora("PROTEIN CRUSH 450G", "neutra");
+    return fora("PROTEIN CRUSH", "neutra");
+  }
+  if (tem("BETA ALANINE")) return nov("BETA ALANINE 300G");
+  if (tem("CREATINE")) {
+    if (n.includes("150")) return nov("CREATINE 150G");
+    if (n.includes("500")) return nov("CREATINE 500G");
+    if (n.includes("300"))
+      return n.includes("BORNTODISRUPT") ? nov("CREATINE 300G SEM SABOR") : nov("CREATINE 300G SABORES");
+    return { produto: null, familia: "produto", classe: "mix", foraTabelaNov: true, nomeCanon: null };
+  }
+  if (tem("GLUTAMINA")) return nov("GLUTAMINA 300G");
+  if (tem("FCKNG BOOSTER")) {
+    if (n.includes("600")) return nov("FCKNG BOOSTER 600G");
+    if (n.includes("300")) return nov("FCKNG BOOSTER 300G");
+    return { produto: null, familia: "produto", classe: "mix", foraTabelaNov: true, grupo: "pretreino", nomeCanon: null };
+  }
+  if (tem("DISPLAY", "FCKNG")) return fora("DISPLAY FCKNG BOOSTER", "mix");
+  if (tem("RAMPAGE")) return nov("RAMPAGE 300G");
+  if (tem("WARZONE ROCKET")) return nov("WARZONE ROCKET ENERGY 450G");
+  if (tem("WARZONE NIGHT")) return nov("WARZONE NIGHT BATTLE 360G");
+  if (tem("DIMETHYLEX")) {
+    if (n.includes("STIM FREE")) return nov("DIMETHYLEX STIM FREE 60 CAPS");
+    if (n.includes("TIME RELEASE")) return fora("DIMETHYLEX TIME RELEASE", "mix");
+    return nov("DIMETHYLEX 60 CAPS");
+  }
+  if (tem("CARNITINE")) return nov("X-CARNITINE 480ML");
+  if (tem("CAFEINA")) return nov("CAFEINA ANIDRA 60 CAPS");
+  if (tem("COENZIMA")) return nov("COENZIMA Q10 NANO 20ML");
+  if (tem("COQ")) return nov("COQ-10 60 CAPS");
+  if (tem("MAGNESIO")) return nov("MAGNESIO INOSITOL 300G");
+  if (tem("MULTIVITAMINICO")) return nov("MULTIVITAMINICO 90 CAPS");
+  if (tem("OMEGA")) {
+    if (n.includes("120")) return nov("OMEGA-3 120 CAPS");
+    if (n.includes("60")) return nov("OMEGA-3 60 CAPS");
+    return { produto: null, familia: "produto", classe: "mix", foraTabelaNov: true, nomeCanon: null };
+  }
+  if (tem("OSTEO")) return nov("OSTEO REPAIR 60 CAPS");
+  if (tem("VITAMINA") && n.includes("D3")) return nov("VITAMINA D3 + K2 30ML");
+  if (tem("TESTO CYCLE")) return nov("TESTO CYCLE 120 CAPS");
+  if (tem("CAPTAIN GAINER")) return nov("CAPTAIN GAINER 3KG");
+  if (tem("BUENISSIMO")) return nov("BARRA BUENISSIMO 12 UN");
+  if (tem("GLUTAMINA")) return nov("GLUTAMINA 300G");
+  if (tem("CLEMBUTER")) return fora("CLEMBUTER UNDER", "mix");
+  return { produto: null, familia: "produto", classe: "mix", foraTabelaNov: true, nomeCanon: null };
+}
+const CACHE_NOV = new Map();
+function mapearProdutoNov(codigo, produto) {
+  const cod = String(codigo ?? "").trim().toUpperCase();
+  const chave = cod + "|" + produto;
+  if (CACHE_NOV.has(chave)) return CACHE_NOV.get(chave);
+  const r = calcularMapaNov(cod, produto);
+  CACHE_NOV.set(chave, r);
+  return r;
+}
+
+/* Faixa pelo PISO (Black November): "Tabela 30K" vale a partir de R$ 30.000,
+   com tolerância de 2% para baixo. Abaixo de R$ 4.900 usa a 5K com alerta. */
+function faixaDeBlack(total) {
+  if (total == null || total <= 0) return null;
+  const pisos = FAIXAS.map((f) => f.teto);
+  let idx = 0, abaixoPiso = false;
+  if (total < pisos[0] * (1 - TOLERANCIA)) { idx = 0; abaixoPiso = true; }
+  else for (let i = 0; i < pisos.length; i++) if (total >= pisos[i] * (1 - TOLERANCIA)) idx = i;
+  const tolerada = !abaixoPiso && total < pisos[idx];
+  return {
+    ...FAIXAS[idx], indice: idx,
+    tolerada, abaixoPiso,
+    falta: tolerada ? Number((pisos[idx] - total).toFixed(2)) : 0,
+    noTopo: idx >= FAIXAS.length - 1,
+    carta: idx < FAIXAS.length - 1 ? { ...FAIXAS[idx + 1], indice: idx + 1 } : null,
+    piso: true,
+  };
+}
+const ehItemOferta = (i) =>
+  i.produto && OFERTA_BLACK[i.produto.nome] != null && i.bruto != null &&
+  Math.abs(i.bruto - OFERTA_BLACK[i.produto.nome]) <= 0.03;
+
+const DIREITO_CREATINA = (n) => (n < 48 ? 0 : 16 + 4 * Math.floor((n - 48) / 12));
+
 /* ---------- kits de setembro ----------
    O preço do kit só vale com todos os itens juntos e nas quantidades
    indicadas. Faltando quantidade, o validador avisa mas não reprova. */
@@ -860,9 +1059,11 @@ function margemDe(itens, uf) {
   const porItem = [];
   for (const i of itens) {
     faturamento += i.total;
-    // o Milk Shake não está na TABELA (produto === null), então o custo vem
-    // pela constante própria; os demais vêm da planilha de precificação
-    const c = i.produto ? CUSTOS[i.produto.nome]
+    // Black November: o custo já vem resolvido por linha (custoUnit).
+    // Nos meses antigos: TABELA para os produtos e constante para o Milk Shake.
+    const c = i.black
+      ? (i.custoUnit ?? null)
+      : i.produto ? CUSTOS[i.produto.nome]
       : ehMilkShake(i.nomeErp) ? CUSTO_MILK_SHAKE : null;
     // o custo financeiro vem da própria condição de pagamento da linha
     const fin = i.pagto.financeiro;
@@ -914,6 +1115,18 @@ const CONDICOES = [
 function condicaoPagamento(txt, dataPedido) {
   const c = CONDICOES.find((x) => x.teste.test(String(txt ?? "")));
   if (!c) return { desconto: 0, financeiro: 0.045, nome: "a prazo", rotulo: "a prazo" };
+  // Black November: desconto só de 09/11 a 15/11 (10% à vista, 5% cartão);
+  // de 16/11 em diante cartão e à vista pagam o preço do boleto (0%).
+  if (ehBlack(dataPedido)) {
+    const desconto = blackComDesconto(dataPedido) ? c.depois : 0;
+    return {
+      desconto,
+      financeiro: c.financeiro,
+      rotulo: c.rotulo,
+      nome: desconto > 0 ? `${c.rotulo} −${(desconto * 100).toFixed(0)}%` : `${c.rotulo} (preço de boleto)`,
+      black: true,
+    };
+  }
   const d = paraData(dataPedido);
   const desconto = d != null && d >= chaveData(INICIO_NOVA_CONDICAO) ? c.depois : c.antes;
   return {
@@ -962,29 +1175,122 @@ function montarItens(linhas, cols) {
   return linhas.map((l) => {
     const codigo = String(l[cols.codigo] ?? "").trim();
     const nomeErp = String(l[cols.produto] ?? "").trim();
-    const achado = mapearProduto(codigo, nomeErp);
-    const familia = achado.familia;
-    // produto que saiu do catálogo do mês não tem preço de campanha
-    const produto = achado.produto && catalogo.fora.has(achado.produto.nome) ? null : achado.produto;
-    const foraDoMes = !!achado.produto && !produto;
+    const dataPed = l[cols.dataPedido];
+    const black = ehBlack(dataPed);
     // cada linha traz a própria condição de pagamento, e o desconto dela
     // já vem embutido no preço unitário gravado pelo ERP
-    const pagto = condicaoPagamento(l[cols.condPgto], l[cols.dataPedido]);
+    const pagto = condicaoPagamento(l[cols.condPgto], dataPed);
     const unit = paraNumero(l[cols.valUnit]);
     const total = paraNumero(l[cols.valTotal]) ?? 0;
-    return {
-      codigo, nomeErp, produto, familia, pagto, foraDoMes,
+    const comum = {
+      codigo, nomeErp,
       condPgtoBruto: String(l[cols.condPgto] ?? ""),
       pedido: String(l[cols.pedido] ?? "").trim(),
       ehPA: codigo.toUpperCase().startsWith("PA"),
       bonificado: ehBooleano(l[cols.bonificado], "true"),
       qtde: paraNumero(l[cols.qtde]) ?? 0,
-      unit,
+      unit, pagto,
       bruto: semDesconto(unit, pagto.desconto),
       total,
       totalBruto: semDesconto(total, pagto.desconto) ?? 0,
     };
+    if (black) {
+      const achado = mapearProdutoNov(codigo, nomeErp);
+      return {
+        ...comum,
+        produto: achado.produto,
+        familia: achado.familia,
+        classe: achado.classe,
+        grupo: achado.grupo || (achado.produto ? achado.produto.grupo : null),
+        nomeCanon: achado.nomeCanon ?? (achado.produto ? achado.produto.nome : null),
+        foraTabelaNov: !!achado.foraTabelaNov,
+        custoUnit: custoNovDe(achado.nomeCanon ?? (achado.produto ? achado.produto.nome : null)),
+        foraDoMes: false,
+        black: true,
+      };
+    }
+    const achado = mapearProduto(codigo, nomeErp);
+    const produto = achado.produto && catalogo.fora.has(achado.produto.nome) ? null : achado.produto;
+    return {
+      ...comum,
+      produto,
+      familia: achado.familia,
+      foraDoMes: !!achado.produto && !produto,
+      black: false,
+    };
   });
+}
+
+/* Negociação no regime Black November: faixa pelo piso, classes
+   Proteína/Neutra/Mix, oferta de alto volume fora da conta, teto por faixa. */
+function resumirNegociacaoBlack(ids, linhas, cols, validos, total, totalBruto) {
+  const faixa = faixaDeBlack(totalBruto);
+  const idx = faixa ? faixa.indice : 0;
+  const limite = TETO_PROT_BLACK[idx];
+  const teto = limite + TOLERANCIA_PROTEINA;
+
+  // oferta de alto volume: soma de unidades por produto no mês
+  const ofertaQtde = new Map();
+  for (const i of validos)
+    if (ehItemOferta(i)) ofertaQtde.set(i.produto.nome, (ofertaQtde.get(i.produto.nome) || 0) + (i.qtde || 0));
+  const qualificadoOferta = new Map();
+  for (const [nome, q] of ofertaQtde) qualificadoOferta.set(nome, q >= OFERTA_MINIMO);
+  const itemQualificado = (i) => ehItemOferta(i) && qualificadoOferta.get(i.produto.nome);
+
+  const altoVolume = Number(validos.filter(itemQualificado).reduce((s, i) => s + i.totalBruto, 0).toFixed(2));
+  const proteinaTotal = Number(validos.filter((i) => i.classe === "proteina").reduce((s, i) => s + i.totalBruto, 0).toFixed(2));
+  const neutras = Number(validos.filter((i) => i.classe === "neutra").reduce((s, i) => s + i.totalBruto, 0).toFixed(2));
+  const numerador = Number((proteinaTotal - altoVolume).toFixed(2));
+  const denominador = Number((totalBruto - altoVolume - neutras).toFixed(2));
+  const fatia = denominador > 0 ? numerador / denominador : 0;
+
+  const naTabela = validos.filter(
+    (i) => (i.produto && i.bruto != null && i.produto.precos.some((p) => Math.abs(p - i.bruto) <= 0.03)) || ehItemOferta(i)
+  ).length;
+  const adesao = validos.length ? naTabela / validos.length : 0;
+
+  const totaisPorPedido = new Map();
+  const valorBrutoPorPedido = new Map();
+  const preTermoPorPedido = new Map();
+  const creatina150Bonif = new Map();
+  const ehBonifPedido = new Map();
+  const dataPorPedido = new Map();
+  {
+    const porId = new Map();
+    for (const l of linhas) {
+      const pid = String(l[cols.pedido] ?? "").trim();
+      if (!pid) continue;
+      if (!porId.has(pid)) porId.set(pid, []);
+      porId.get(pid).push(l);
+    }
+    for (const [pid, ls] of porId) {
+      const its = montarItens(ls, cols);
+      const vs = its.filter((i) => i.ehPA && !i.bonificado);
+      totaisPorPedido.set(pid, Number(vs.reduce((s, i) => s + i.total, 0).toFixed(2)));
+      valorBrutoPorPedido.set(pid, Number(vs.reduce((s, i) => s + i.totalBruto, 0).toFixed(2)));
+      preTermoPorPedido.set(pid, vs.filter((i) => i.grupo === "pretreino" || i.grupo === "termo").reduce((s, i) => s + (i.qtde || 0), 0));
+      creatina150Bonif.set(pid, its.filter((i) => i.ehPA && i.bonificado && i.nomeCanon === "CREATINE 150G").reduce((s, i) => s + (i.qtde || 0), 0));
+      ehBonifPedido.set(pid, pedidoEhBonificacao(ls, cols));
+      dataPorPedido.set(pid, String(ls[0]?.[cols.dataPedido] ?? "").trim());
+    }
+  }
+  const data = String(linhas[0]?.[cols.dataPedido] ?? "").trim();
+  const regime = { nome: "Black November", semData: paraData(data) == null, excecao: false, limite, teto };
+  return {
+    ids, total, totalBruto, faixa, regime, black: true,
+    proteina: numerador, proteinaTotal, neutras, altoVolume, numerador, denominador,
+    limiteBlack: limite, teto,
+    mix: Number((denominador - numerador).toFixed(2)),
+    fatia, habilitado: denominador <= 0 ? true : fatia <= teto + 1e-9,
+    somas: somarPorProduto(validos),
+    naTabela, adesao,
+    tipo: adesao >= 0.8 ? "campanha" : adesao > 0 ? "misto" : "negociado",
+    itens: validos.length,
+    ofertaQtde, qualificadoOferta,
+    totaisPorPedido, valorBrutoPorPedido, preTermoPorPedido, creatina150Bonif, ehBonifPedido, dataPorPedido,
+    // campos do regime antigo que o analisador referencia — neutralizados
+    milkPorPedido: new Set(), milkBruto: 0, razaoBase: denominador, campanhaProteina: false, somenteProteina: false,
+  };
 }
 
 /* A condição comercial (faixa, proteína, habilitação) vale para a negociação
@@ -993,6 +1299,8 @@ function resumirNegociacao(ids, linhas, cols) {
   const validos = montarItens(linhas, cols).filter((i) => i.ehPA && !i.bonificado);
   const total = Number(validos.reduce((s, i) => s + i.total, 0).toFixed(2));
   const totalBruto = Number(validos.reduce((s, i) => s + i.totalBruto, 0).toFixed(2));
+  if (ehBlack(String(linhas[0]?.[cols.dataPedido] ?? "").trim()))
+    return resumirNegociacaoBlack(ids, linhas, cols, validos, total, totalBruto);
   const proteina = Number(
     validos.filter((i) => i.produto && PROTEINAS.has(i.produto.nome))
       .reduce((s, i) => s + i.totalBruto, 0).toFixed(2)
@@ -1127,13 +1435,53 @@ function analisarPedido(id, linhas, cols, titulos, neg, historico) {
 
   // pedido de bonificação: fica de fora da soma e é conferido à parte
   if (!validos.length) {
+    const motivosBon = motivoDebito ? [motivoDebito] : [];
+    if (neg && neg.black) {
+      // Black November: bonificação é de Creatine 150g ligada a um pedido de
+      // venda do mesmo cliente no mês. Confere composição e direito.
+      const foraCreatina = bonificados.filter((i) => i.ehPA && i.nomeCanon !== "CREATINE 150G");
+      const creatinaQtde = bonificados.filter((i) => i.ehPA && i.nomeCanon === "CREATINE 150G").reduce((s, i) => s + (i.qtde || 0), 0);
+      // acha o pedido de venda ligado: mesmo mês, data mais próxima, depois maior valor
+      const vendas = (neg.ids || []).filter((x) => x !== id && neg.ehBonifPedido && !neg.ehBonifPedido.get(x));
+      const dBon = paraData(neg.dataPorPedido ? neg.dataPorPedido.get(id) : base.data) || 0;
+      let venda = null, melhor = Infinity, maiorValor = -1;
+      for (const x of vendas) {
+        const dx = paraData(neg.dataPorPedido ? neg.dataPorPedido.get(x) : "") || 0;
+        const dist = Math.abs(dx - dBon);
+        const val = neg.valorBrutoPorPedido ? (neg.valorBrutoPorPedido.get(x) || 0) : 0;
+        if (dist < melhor || (dist === melhor && val > maiorValor)) { melhor = dist; maiorValor = val; venda = x; }
+      }
+      const direito = venda && neg.preTermoPorPedido ? DIREITO_CREATINA(neg.preTermoPorPedido.get(venda) || 0) : null;
+      let segura = false;
+      if (foraCreatina.length) {
+        segura = true;
+        motivosBon.push({ nivel: "segurar", texto: `Bonificação com itens além de Creatine 150g: ${foraCreatina.map((i) => `${i.qtde}x ${i.nomeErp}`).join(", ")} — segurar e conferir` });
+      }
+      if (venda && direito != null) {
+        if (creatinaQtde > direito) {
+          segura = true;
+          motivosBon.push({ nivel: "segurar", texto: `Creatine 150g bonificada (${creatinaQtde}) acima do direito do pedido ${venda} (${direito}) — segurar` });
+        } else {
+          motivosBon.push({ nivel: "info", texto: `Bonificação de ${creatinaQtde} Creatine 150g ligada ao pedido ${venda} (direito de ${direito})` });
+        }
+      } else {
+        motivosBon.push({ nivel: "aviso", texto: `Bonificação de ${creatinaQtde} Creatine 150g — pedido de venda do mês não encontrado para conferir o direito` });
+      }
+      return {
+        ...base, itens, debito, passivo, pedidos: [id],
+        tipo: "bonificacao",
+        veredito: debito ? "inadimplente" : segura ? "segurar" : "bonificacao",
+        totalBonificado: bonificados.reduce((s, i) => s + i.total, 0),
+        motivos: motivosBon, divergentes: [],
+      };
+    }
     return {
       ...base, itens, debito, passivo, pedidos: [id],
       tipo: "bonificacao",
       veredito: debito ? "inadimplente" : "bonificacao",
       totalBonificado: bonificados.reduce((s, i) => s + i.total, 0),
       motivos: [
-        ...(motivoDebito ? [motivoDebito] : []),
+        ...motivosBon,
         ...(BONIFICACAO_POR_FAIXA
           ? []
           : [{ nivel: "alerta", texto: "Bonificação — tabela de percentual por faixa ainda não cadastrada no validador" }]),
@@ -1197,6 +1545,135 @@ function analisarPedido(id, linhas, cols, titulos, neg, historico) {
       texto: `Margem de contribuição ${pct} — abaixo do piso de 25%. ${detalhe}`,
     };
   })();
+
+  /* ===================== BLACK NOVEMBER ===================== */
+  if (neg.black) {
+    const explicados = new Set();
+    const faixaB = neg.faixa;
+    const ixCarta = faixaB && faixaB.carta ? faixaB.carta.indice : -1;
+    const depoisDoDesconto = ehBlack(base.data) && !blackComDesconto(base.data);
+
+    // oferta de alto volume: itens têm preço próprio, saem da conferência
+    for (const i of validos) if (ehItemOferta(i)) explicados.add(i);
+    for (const [nome, q] of (neg.ofertaQtde || new Map())) {
+      if (neg.qualificadoOferta.get(nome))
+        motivos.push({ nivel: "info", texto: `Oferta de alto volume: ${q} un de ${nome} no mês (≥ ${OFERTA_MINIMO}) — fora da conta proteína/mix` });
+      else
+        motivos.push({ nivel: "aviso", texto: `${nome}: ${q} un na oferta de alto volume (abaixo de ${OFERTA_MINIMO}) — preço aceito, mas conta como proteína na proporção` });
+    }
+
+    // proporção proteína/mix
+    if (neg.denominador > 0) {
+      if (!neg.habilitado) {
+        const t = neg.teto, P = neg.numerador, B = neg.denominador;
+        const tirar = (P - t * B) / (1 - t);
+        const somar = P / t - B;
+        motivos.push({
+          nivel: "erro",
+          texto:
+            `Não habilitado: proteína ${(neg.fatia * 100).toFixed(1)}% ${irmaos.length ? "da negociação" : "do pedido"} ` +
+            `(teto de ${(neg.limiteBlack * 100).toFixed(0)}% na faixa ${faixaB ? faixaB.curto : "—"}, bloqueia acima de ${(t * 100).toFixed(0)}%). ` +
+            `Falta tirar ${moeda(tirar)} em proteína ou somar ${moeda(somar)} em mix`,
+        });
+      } else if (neg.fatia > neg.limiteBlack) {
+        motivos.push({ nivel: "aviso", texto: `Proteína em ${(neg.fatia * 100).toFixed(1)}% — acima de ${(neg.limiteBlack * 100).toFixed(0)}%, habilitado pela tolerância de 3 pontos` });
+      } else {
+        motivos.push({ nivel: "info", texto: `Proporção: proteína ${(neg.fatia * 100).toFixed(1)}% (teto ${(neg.limiteBlack * 100).toFixed(0)}% na faixa ${faixaB ? faixaB.curto : "—"})` });
+      }
+    }
+    if (neg.regime.semData) motivos.push({ nivel: "alerta", texto: "Pedido sem data legível — aplicada a regra padrão" });
+
+    // faixa pela tolerância / abaixo do piso
+    if (faixaB && faixaB.abaixoPiso)
+      motivos.push({ nivel: "alerta", texto: `Abaixo do piso de R$ 5.000 — usada a tabela 5K (alerta informativo)` });
+    else if (faixaB && faixaB.tolerada)
+      motivos.push({ nivel: "aviso", texto: `Faltam ${moeda(faixaB.falta)} para fechar a faixa ${faixaB.rotulo} — entrou pela tolerância de 2%` });
+
+    // conferência de preço item a item
+    const colunasDe = (i) => {
+      const cols = i.produto ? [...i.produto.precos] : [];
+      if (i.produto && OFERTA_BLACK[i.produto.nome] != null) cols.push(OFERTA_BLACK[i.produto.nome]);
+      return cols;
+    };
+    for (const i of validos) {
+      if (explicados.has(i)) continue;
+      if (i.foraTabelaNov || !i.produto) {
+        motivos.push({ nivel: "segurar", texto: `Fora da tabela de novembro: ${i.qtde}x ${i.nomeErp} a ${moeda(i.bruto)} — conferir` });
+        continue;
+      }
+      if (i.unit == null || i.bruto == null) continue;
+      // desconto de cartão/à vista aplicado depois de 15/11: o preço deveria ser o do boleto
+      if (depoisDoDesconto) {
+        const bateComDesc = colunasDe(i).some((p) => Math.abs(i.unit - p * 0.95) <= 0.03 || Math.abs(i.unit - p * 0.9) <= 0.03);
+        if (bateComDesc && i.unit < i.produto.precos[faixaB.indice] - 0.03) {
+          motivos.push({ nivel: "segurar", texto: `${i.nomeErp}: desconto de cartão/à vista aplicado depois de 15/11 — o preço deveria ser o do boleto` });
+          continue;
+        }
+      }
+      const esperado = i.produto.precos[faixaB.indice];
+      const dif = Number((i.bruto - esperado).toFixed(2));
+      if (Math.abs(dif) <= 0.03) continue;
+      const outra = i.produto.precos.findIndex((p) => Math.abs(p - i.bruto) <= 0.03);
+      const ehCarta = outra >= 0 && outra === ixCarta;
+      const tabelaMaisCara = outra >= 0 && outra < faixaB.indice;
+      divergentes.push({
+        ...i, esperado, dif, faixaOutra: outra, ehCarta,
+        pista: ehCarta
+          ? `Carta na Manga — faixa ${FAIXAS[outra].rotulo}`
+          : tabelaMaisCara
+          ? `preço da faixa ${FAIXAS[outra].rotulo}, acima do devido — negociação válida`
+          : outra >= 0
+          ? `preço da faixa ${FAIXAS[outra].rotulo}`
+          : "preço negociado, fora da tabela",
+        nivel: ehCarta ? "carta" : tabelaMaisCara ? "info" : outra >= 0 && dif < 0 ? "erro" : "alerta",
+      });
+    }
+
+    // pedido negociado: nenhum item bate com a tabela nem com a oferta
+    const algumNaTabela = validos.some(
+      (i) => (i.produto && i.bruto != null && i.produto.precos.some((p) => Math.abs(p - i.bruto) <= 0.03)) || ehItemOferta(i)
+    );
+    let tipoB = algumNaTabela ? neg.tipo : "negociado";
+    if (!algumNaTabela && validos.length) {
+      const custoCompleto = margem.cobertura >= 0.999;
+      if (margem.pct >= 0.295 && custoCompleto)
+        motivos.push({ nivel: "info", texto: `Preço negociado (nenhum item na tabela) — segue por MC ${(margem.pct * 100).toFixed(1)}% ≥ 29,5% com custo completo` });
+      else
+        motivos.push({
+          nivel: "segurar",
+          texto:
+            `Preço negociado (nenhum item na tabela): ` +
+            `${custoCompleto ? `MC ${(margem.pct * 100).toFixed(1)}% abaixo de 29,5%` : "custo não cadastrado em todos os itens"} — manter em análise`,
+        });
+    }
+
+    // bonificação de creatina: informação no pedido de venda
+    const nPT = neg.preTermoPorPedido ? (neg.preTermoPorPedido.get(id) || 0) : 0;
+    if (nPT >= 48) {
+      const direito = DIREITO_CREATINA(nPT);
+      motivos.push({ nivel: "info", texto: `Bonificação de creatina: ${nPT} pré-treinos/termogênicos dão direito a ${direito} Creatine 150g` });
+    }
+
+    if (motivoMC) motivos.unshift(motivoMC);
+    if (motivoDebito) motivos.unshift(motivoDebito);
+
+    // ordem de decisão: inadimplente > erro > segurar > carta > negociado > resto
+    let veredito = "liberado";
+    if (debito) veredito = "inadimplente";
+    else if (motivos.some((m) => m.nivel === "erro") || divergentes.some((d) => d.nivel === "erro")) veredito = "erro";
+    else if (motivos.some((m) => m.nivel === "segurar")) veredito = "segurar";
+    else if (motivos.some((m) => m.nivel === "carta") || divergentes.some((d) => d.nivel === "carta")) veredito = "carta";
+    else if (!algumNaTabela && validos.length) veredito = "negociado";
+    else if (motivos.some((m) => m.nivel !== "info" && m.nivel !== "aviso") || divergentes.some((d) => d.nivel !== "info")) veredito = "alerta";
+
+    return {
+      ...base, itens, validos, total, totalBruto, pagto, proteina: neg.numerador,
+      mix: neg.mix, fatia: neg.fatia, faixa: neg.faixa, regime: neg.regime, debito, passivo, neg, margem,
+      habilitado: neg.habilitado, naTabela: neg.naTabela, adesao: neg.adesao, tipo: tipoB,
+      motivos, divergentes, veredito,
+    };
+  }
+  /* =================== fim BLACK NOVEMBER =================== */
 
   // kits e condição de volume têm preço próprio e valem mesmo quando o pedido
   // é reprovado por outro motivo — rodam antes de qualquer bifurcação
@@ -1498,6 +1975,7 @@ background:var(--papel);color:var(--tinta);font-family:var(--sans);font-size:14p
 .vp-ped.kit{border-left:3px solid #5B3C88}
 .vp-ped.liberado{border-left:3px solid var(--ok)}
 .vp-ped.negociado{border-left:3px solid var(--aten)}
+.vp-ped.segurar{border-left:3px solid #8A5A00;background:#FDFBF5}
 .vp-ped.bonificacao{border-left:3px solid var(--linha)}
 .vp-ped-topo{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 14px;cursor:pointer}
 .vp-ped-id{font-family:var(--mono);font-weight:600;font-size:14px}
@@ -1512,6 +1990,7 @@ background:var(--papel);color:var(--tinta);font-family:var(--sans);font-size:14p
 .vp-motivos li.carta{color:var(--azul);font-weight:500}
 .vp-motivos li.info{color:var(--fraca)}
 .vp-motivos li.aviso{color:var(--aten)}
+.vp-motivos li.segurar{color:#8A5A00;font-weight:500}
 .vp-tab{width:100%;border-collapse:collapse;font-size:12px;font-family:var(--mono)}
 .vp-tab th{text-align:left;padding:6px 8px;font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--fraca);border-bottom:1px solid var(--linha)}
 .vp-tab td{padding:6px 8px;border-bottom:1px solid #EDF1F4}
@@ -1528,6 +2007,7 @@ background:var(--papel);color:var(--tinta);font-family:var(--sans);font-size:14p
 .vp-selo.kit{color:#FFF;border-color:#5B3C88;background:#5B3C88}
 .vp-selo.liberado{color:var(--ok);border-color:var(--ok);background:var(--okf)}
 .vp-selo.negociado{color:var(--aten);border-color:var(--aten);background:var(--atenf)}
+.vp-selo.segurar{color:#8A5A00;border-color:#8A5A00;background:#FBF1DC}
 .vp-selo.bonificacao{color:var(--fraca);border-color:var(--linha);background:var(--papel)}
 .vp-barrinha{display:inline-block;width:70px;height:5px;border-radius:3px;background:var(--linha);overflow:hidden;vertical-align:middle;margin-left:4px}
 .vp-barrinha i{display:block;height:100%}
@@ -1976,7 +2456,7 @@ function ValidadorPedidos() {
   }, [dados, fila, formaPgto]);
 
   const contagem = useMemo(() => {
-    const c = { inadimplente: 0, erro: 0, carta: 0, alerta: 0, negociado: 0, kit: 0, liberado: 0, bonificacao: 0 };
+    const c = { inadimplente: 0, erro: 0, segurar: 0, carta: 0, alerta: 0, negociado: 0, kit: 0, liberado: 0, bonificacao: 0 };
     visiveis.forEach((p) => { c[p.veredito] += 1; });
     // o verde conta tudo que pode seguir, inclusive com ressalva — por isso a
     // soma dos contadores passa do total de pedidos, de propósito
@@ -2016,7 +2496,7 @@ function ValidadorPedidos() {
         Pagamento: p.pagto ? p.pagto.nome : "",
         Proteina: p.fatia != null ? (p.fatia * 100).toFixed(1) + "%" : "",
         Faixa: p.faixa ? p.faixa.rotulo : "—",
-        Veredito: { inadimplente: "INADIMPLENTE", erro: "BLOQUEADO", carta: "CARTA NA MANGA", negociado: "PRECO NEGOCIADO", kit: "KIT" }[p.veredito] || "ATENCAO",
+        Veredito: { inadimplente: "INADIMPLENTE", erro: "BLOQUEADO", segurar: "EM ANALISE", carta: "CARTA NA MANGA", negociado: "PRECO NEGOCIADO", kit: "KIT" }[p.veredito] || "ATENCAO",
       };
       for (const m of p.motivos) saida.push({ ...cab, Tipo: "pedido", Item: "", Motivo: m.texto });
       for (const d of p.divergentes)
@@ -2030,7 +2510,7 @@ function ValidadorPedidos() {
   }
 
   const rotuloVeredito = {
-    inadimplente: "Inadimplente", erro: "Bloqueado", alerta: "Atenção", carta: "Carta na Manga", kit: "Kit", liberado: "Liberado",
+    inadimplente: "Inadimplente", erro: "Bloqueado", segurar: "Manter em análise", alerta: "Atenção", carta: "Carta na Manga", kit: "Kit", liberado: "Liberado",
     negociado: "Preço negociado", bonificacao: "Bonificação",
   };
 
@@ -2040,7 +2520,7 @@ function ValidadorPedidos() {
       <div className="vp-wrap">
         <header className="vp-topo">
           <div>
-            <p className="vp-eyebrow">Under's Brothers · tabela de agosto</p>
+            <p className="vp-eyebrow">Under's Brothers · regra pela data do pedido · Black November a partir de 09/11</p>
             <h1 className="vp-titulo">Conferência comercial</h1>
             <p className="vp-sub">
               Habilitação pelos 50% de proteína, faixa pelo total em produto e preço item a item.
@@ -2134,6 +2614,7 @@ function ValidadorPedidos() {
               <div className="vp-tally">
                 <div><b style={{ color: "#6B0F0A" }}>{contagem.inadimplente}</b><span style={{ color: "#6B0F0A" }}>Inadimplentes</span></div>
                 <div><b style={{ color: "var(--bloq)" }}>{contagem.erro}</b><span style={{ color: "var(--bloq)" }}>Bloqueados</span></div>
+                <div><b style={{ color: "#8A5A00" }}>{contagem.segurar}</b><span style={{ color: "#8A5A00" }}>Em análise</span></div>
                 <div><b style={{ color: "var(--aten)" }}>{contagem.alerta}</b><span style={{ color: "var(--aten)" }}>Atenção</span></div>
                 <div><b style={{ color: "var(--azul)" }}>{contagem.carta}</b><span style={{ color: "var(--azul)" }}>Carta na manga</span></div>
                 <div><b style={{ color: "#5B3C88" }}>{contagem.kit}</b><span style={{ color: "#5B3C88" }}>Kit</span></div>
